@@ -792,7 +792,10 @@
    <field name='MarketDepth' required='Y' />
    <field name='MDUpdateType' required='N' />
    <field name='AggregatedBook' required='N' />
-   <field name='OpenCloseSettlFlag' required='N' />
+   <field name='OpenCloseSettlFlag' required='N'> 
+     <value enum='0' description='Daily Open Price' />
+     <value enum='5' description='Indicative Open Price (IOP)' />
+   </field>
    <field name='Scope' required='N' />
    <field name='MDImplicitDelete' required='N' />
    <component name='MDReqGrp' required='Y' />
@@ -10036,11 +10039,16 @@
   <field number='5792' name='OpenInterestQty' type='QTY'/>
   <field number='5795' name='LegSecurityGroup' type='LOCALMKTDATE'/>
   <field number='5796' name='TradingReferenceDate' type='LOCALMKTDATE'/>
-  <field number='5797' name='AggressorSide' type='INT' />
+  <field number='5797' name='AggressorSide' type='INT'>
+    <value enum='0' description='No Aggressor'/>
+    <value enum='1' description='Buy' />
+    <value enum='2' description='Sell' />
+  </field>
   <field number='5799' name='MatchEventIndicator' type='CHAR'/>
   <field number='5819' name='DecayStartDate' type='LOCALMKTDATE'/>
   <field number='5849' name='OriginalContactSize' type='QTY'/>
   <field number='6937' name='Asset' type='STRING' />
+  <field number='9633' name='ReferenceID' type='INT' />
   <field number='9787' name='DisplayFactor' type='FLOAT' />
   <field number='9779' name='UserDefinedInstrument' type='STRING' />
   <field number='9800' name='PriceDisplayFormat' type='INT' />
@@ -10048,5 +10056,13 @@
   <field number='37702' name='MainFraction'  type='INT' />
   <field number='37703' name='SubFraction'  type='INT' />
   <field number='37705' name='NoOrderIDEntries'  type='NUMINGROUP' />
+  <field number='37706' name='MDDisplayQty'  type='INT' />
+  <field number='37707' name='MDOrderPriority'  type='INT' />
+  <field number='37708' name='OrderUpdateAction'  type='INT'>
+   <value enum='0' description='NEW'/>
+   <value enum='1' description='UPDATE'/>
+   <value enum='2' description='DELETE'/>
+  </field>
+  <field number='37711' name='MDTrdEntrID' type='INT' />
  </fields>
 </fix>
