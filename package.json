@@ -1,47 +1,47 @@
 {
-  "name": "fix2json",
-  "version": "0.5.0",
-  "description": "Command-line utility to present FIX protocol messages as JSON",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/SunGard-Labs/fix2json"
-  },
-  "bin": {
-    "fix2json": "fix2json.js",
-    "fix2yaml": "fix2json.js"
-  },
-  "author": "FIS Advanced Technology",
-  "contributors": [
-    {
-      "name": "Salvatore Sferrazza",
-      "email": "salvatore.sferrazza@sungard.com"
-    }
-  ],
-  "license": "MIT",
-  "preferGlobal": "true",
-  "dependencies": {
-    "underscore": "~1.7.0",
-    "xmldom": "~0.1.19",
-    "xpath": "~0.0.9",
-    "node-xml": "~1.0.2",
-    "string_decoder": "~0.10.31",
-    "yamljs": "~0.2.4",
-    "zlib": "~1.0.5"
-  },
-  "keywords": [
-    "FIX",
-    "drop copy",
-    "message",
-    "parsing",
-    "data",
-    "conversion",
-    "JSON",
-    "FIX protocol"
-  ],
-  "main": "fix2json.js",
-  "analyze": true,
-  "devDependencies": {}
+    "name": "fix2json",
+    "version": "0.5.0",
+    "description": "Command-line utility to present FIX protocol messages as JSON",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/salsferrazza/fix2json"
+    },
+    "bin": {
+        "fix2json": "fix2json.js",
+        "fix2yaml": "fix2json.js"
+    },
+    "author": "Salvatore Sferrazza",
+    "contributors": [
+        {
+            "name": "Salvatore Sferrazza",
+            "email": "sal@instigate.net"
+        }
+    ],
+    "license": "MIT",
+    "preferGlobal": "true",
+    "dependencies": {
+        "underscore": "~1.7.0",
+        "xmldom": "~0.1.19",
+        "xpath": "~0.0.9",
+        "node-xml": "~1.0.2",
+        "string_decoder": "~0.10.31",
+        "yamljs": "~0.2.4",
+        "xml2js": "~0.4.19"
+    },
+    "keywords": [
+        "FIX",
+        "drop copy",
+        "message",
+        "parsing",
+        "data",
+        "conversion",
+        "JSON",
+        "FIX protocol"
+    ],
+    "main": "fix2json.js",
+    "analyze": true,
+    "devDependencies": {}
 }
