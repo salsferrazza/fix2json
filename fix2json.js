@@ -49,12 +49,12 @@ try {
     rd.on('line', function(line) {
         if (line.indexOf(delim) > -1) {
             var msg = decoder.write(processLine(line, options, dict));
-            console.log(msg);
+            //console.log(msg);
         }
     });
 
 } catch (mainException) {
-    console.error("Error in main routine: " + mainException);
+    console.error("Error in main routine: " + mainException.stack);
     process.exit(1);
 }
 
@@ -96,14 +96,9 @@ function readDataDictionary(fileLocation) {
     var dict = {};
     
     parseString(xml, function (err, datadict) {
+//        console.log(util.inspect(datadict, undefined, null));
         if (!err) {
-            
-     
-            dict = makeDict(datadict.fix.messages[0].message,
-                            datadict.fix.components[0].component || undefined,
-                            datadict.fix.fields[0].field);
-            dict.version = Number(datadict.fix.$.major); // 4.x has groups & fields, 5.x has components & field
-            console.log(util.inspect(dict.messages, undefined, null));
+            dict = makeDict(datadict);
         } else {
             console.error(JSON.stringify(err));
             process.exit(1);
@@ -113,26 +108,50 @@ function readDataDictionary(fileLocation) {
     return dict;
 }
 
-function makeDict(messages, components, fields) {
+function makeDict(datadict) {
 
+    //console.log(util.inspect(datadict, undefined, null));
+    
+    let messages = datadict.fix.messages[0].message;
+    let fields = datadict.fix.fields[0].field;
+    let version = Number(datadict.fix.$.major);
+    let components, groups = undefined;
+    console.log(version);
+    if (version === 5) {
+        components = datadict.fix.components[0].component;
+    } else {
+        groups = datadict.fix.fields[0].group;
+    }
+    
     let dict = {};
     let msgs = [];
-    let comps = [];
     let flds = [];
 
+    // process message defs
     _.each(messages, function(value, key, list) {
+
+        let comps = [];
+        let grps = [];
         let msg = value.$
         msg.fields = value.field;
-        msg.components = value.component;
+
+        let bag = version == 4 ? value.group : value.component; 
+        _.each(bag, function(value, key, list) {
+            let item = value.$;
+            item.fields = value.field;
+            if (version === 4) {
+                comps.push(item);
+            } else {
+                grps.push(item);
+            }
+        });
+
+        version === 4 ? msg.groups = grps : msg.components = comps;
         msgs.push(msg);
+
     });
 
-   _.each(components, function(value, key, list) {
-       let comp = value.$;
-       comp.fields = value.field;
-       comps.push(comp);
-    });
-
+    // process field defs
     _.each(fields, function(value, key, list) {
         let fld = value.$;
         let values = [];
@@ -144,9 +163,9 @@ function makeDict(messages, components, fields) {
     });
     
     dict.messages = msgs;
-    dict.components = comps;
     dict.fields = flds;
 
+    console.log(util.inspect(dict, undefined, null));
     return dict;
     
 }
@@ -186,6 +205,57 @@ function extractFields(record, dict) {
     return fieldArray;
 }
 
+function makeGroup(fieldArray, messageDefs, groupNum) {
+
+    let index = 0;
+    let grpVals = [];
+    let anchor = undefined;
+    let grp = {};
+    
+    while (fieldArray.length > 0) {
+
+        let field = fieldArray.shift();
+       
+        if (index === 0) {
+            anchor = field.tag;
+            grp[field.tag] = field.val;
+        } else if (field.tag === anchor) {
+            grpVals.push(grp);
+            grp = {};
+        } else if (isGroup(field, messageDefs)) {
+            console.log('fields before mkg: ' + util.inspect(fieldArray, undefined, null));
+            grp = makeGroup(fieldArray, messageDefs, field.num);
+            grp[field.tag.substring(2)] = grp;
+        } else {
+                grp[field.tag] = field.val;
+        }
+
+        index++;
+        
+    }
+    
+}
+
+function validFields(dict, groupTagNumber) {
+
+    // find message children
+    // for each component, drill down and flatten recursively
+    // for each group, pull out child fields and flatten
+
+    let fields = [];
+
+    console.log('find ' + groupTagNumber + ' in ' + util.inspect(Object.keys(dict.fields), undefined, null));
+
+    _.each(dict.fields, function (value, key, list) {
+        
+        
+        
+    });
+    
+    return fields;
+    
+    
+}
 
 function resolveFields(fieldArray, dict) {
 
@@ -199,16 +269,15 @@ function resolveFields(fieldArray, dict) {
         var val = field.val;
         var raw = field.raw;
         var num = field.num;
-
-        
         
         targetObj[key] = val;
 
         if (isGroup(field, dict.fields)) {
-
-            console.log('GROUP: ' + field.tag + '/' + field.val);
-
-
+            let grp = makeGroup(fieldArray, dict.messages, field.num);
+            targetObj[key.substring(2)] = grp; // Strip prefix 'No' from numingroup
+            //console.log('GROUP: ' + field.tag + '/' + field.val);
+        } else {
+            
         }
 
     }
@@ -218,7 +287,7 @@ function resolveFields(fieldArray, dict) {
 }
 
 
-function pluckGroup(tagArray, messageType, groupName, numInGroup) {
+function pluckGroup(tagArray, messageType, groupName) {
 
     var groupAnchor;
     var group = [];
@@ -258,7 +327,7 @@ function pluckGroup(tagArray, messageType, groupName, numInGroup) {
 //          } else if (key.substring(0, 2) == 'No') { // recurse into new repeating group
             console.log('GROUP: ' + key);// JSON.stringify(newGroup));
             member[key] = val;
-            var newGroup = pluckGroup(tagArray, messageType, key, val);
+            var newGroup = pluckGroup(tagArray, messageType, key);
             member[key.substring('No'.length)] = newGroup;
         } else if (!tagInGroup) { // we've reached the end of the group
             group.push(_.clone(member)); // add the last processed member to the group
@@ -288,6 +357,7 @@ function mnemonify(values, raw) {
 }
 
 function isGroup(field, fields) {
+    let fieldDef = _.findWhere(fields, { number: field.num });
     fieldDef = _.findWhere(fields, { number: field.num });
     return fieldDef ? (fieldDef.type === 'NUMINGROUP' ? true : false) : false;
 }
