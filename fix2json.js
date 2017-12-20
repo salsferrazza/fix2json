@@ -89,6 +89,18 @@ function checkParams() {
 
 }
 
+function prune(array) {
+
+    let output = [];
+
+    _.each(array, function (value, key, list) {
+         output.push(value.$);
+    });
+
+    return output;
+
+}
+
 function readDataDictionary(fileLocation) {
 
     var xml = fs.readFileSync(fileLocation).toString();
@@ -130,23 +142,22 @@ function makeDict(datadict) {
     // process message defs
     _.each(messages, function(value, key, list) {
 
-        let comps = [];
-        let grps = [];
-        let msg = value.$
-        msg.fields = value.field;
 
-        let bag = version == 4 ? value.group : value.component; 
-        _.each(bag, function(value, key, list) {
-            let item = value.$;
+        let items = [];
+        let msg = value.$
+        msg.fields = prune(value.field);
+
+        let bag = version == 4 ? prune(value.group) : prune(value.component);
+        msg[version === 4 ? 'groups' : 'components'] = bag;
+        /*   _.each(bag, function(value, key, list) {
+            let item = ;
             item.fields = value.field;
-            if (version === 4) {
-                comps.push(item);
-            } else {
-                grps.push(item);
-            }
+            items.push(item);
         });
 
-        version === 4 ? msg.groups = grps : msg.components = comps;
+        msg[(version === 4 ? 'groups' : 'components')] = prune(items);
+     */
+        console.log('msg: ' + util.inspect(msg, undefined, null));
         msgs.push(msg);
 
     });
@@ -165,7 +176,7 @@ function makeDict(datadict) {
     dict.messages = msgs;
     dict.fields = flds;
 
-    console.log(util.inspect(dict, undefined, null));
+    console.log(JSON.stringify(dict, undefined, 2));
     return dict;
     
 }
