@@ -90,15 +90,11 @@ function checkParams() {
 }
 
 function prune(array) {
-
     let output = [];
-
     _.each(array, function (value, key, list) {
          output.push(value.$);
     });
-
     return output;
-
 }
 
 function readDataDictionary(fileLocation) {
@@ -108,7 +104,6 @@ function readDataDictionary(fileLocation) {
     var dict = {};
     
     parseString(xml, function (err, datadict) {
-//        console.log(util.inspect(datadict, undefined, null));
         if (!err) {
             dict = makeDict(datadict);
         } else {
@@ -117,49 +112,56 @@ function readDataDictionary(fileLocation) {
         }
     });
 
+    console.log(util.inspect(dict, undefined, null));
     return dict;
 }
 
 function makeDict(datadict) {
-
-    //console.log(util.inspect(datadict, undefined, null));
     
     let messages = datadict.fix.messages[0].message;
     let fields = datadict.fix.fields[0].field;
     let version = Number(datadict.fix.$.major);
     let components, groups = undefined;
-    console.log(version);
+
     if (version === 5) {
-        components = datadict.fix.components[0].component;
+        components = prune(datadict.fix.components[0].component);
     } else {
-        groups = datadict.fix.fields[0].group;
+        groups = prune(datadict.fix.fields[0].group);
     }
     
     let dict = {};
     let msgs = [];
     let flds = [];
-
+    let grps = [];
+    
     // process message defs
     _.each(messages, function(value, key, list) {
 
+        // check current message for groups
+        // for each of those groups,
+        // check the group for fields.
+        // create msg.group.fields
+        // alongside msg.fields
 
         let items = [];
         let msg = value.$
         msg.fields = prune(value.field);
-
-        let bag = version == 4 ? prune(value.group) : prune(value.component);
-        msg[version === 4 ? 'groups' : 'components'] = bag;
-        /*   _.each(bag, function(value, key, list) {
-            let item = ;
-            item.fields = value.field;
-            items.push(item);
-        });
-
-        msg[(version === 4 ? 'groups' : 'components')] = prune(items);
-     */
-        console.log('msg: ' + util.inspect(msg, undefined, null));
+        if (version === 4) {
+            let grp = {};
+            if (value.group) {
+                _.each(value.group, function (v, k, l) {
+                    let grp = v.$;
+                    grp.fields = prune(v.field);
+                    grps.push(grp);
+                });
+            }
+            msg.groups = grps;
+        } else { // 5.x schema
+            if (value.component) {
+                console.log('found comp ' + util.inspect(value.component, undefined, null));
+            }
+        }
         msgs.push(msg);
-
     });
 
     // process field defs
@@ -176,7 +178,7 @@ function makeDict(datadict) {
     dict.messages = msgs;
     dict.fields = flds;
 
-    console.log(JSON.stringify(dict, undefined, 2));
+//    console.log(JSON.stringify(dict, undefined, 2));
     return dict;
     
 }
@@ -217,7 +219,6 @@ function extractFields(record, dict) {
 }
 
 function makeGroup(fieldArray, messageDefs, groupNum) {
-
     let index = 0;
     let grpVals = [];
     let anchor = undefined;
@@ -234,9 +235,8 @@ function makeGroup(fieldArray, messageDefs, groupNum) {
             grpVals.push(grp);
             grp = {};
         } else if (isGroup(field, messageDefs)) {
-            console.log('fields before mkg: ' + util.inspect(fieldArray, undefined, null));
             grp = makeGroup(fieldArray, messageDefs, field.num);
-            grp[field.tag.substring(2)] = grp;
+            grp[field.tag.substring('No'.length)] = grp;
         } else {
                 grp[field.tag] = field.val;
         }
@@ -244,7 +244,6 @@ function makeGroup(fieldArray, messageDefs, groupNum) {
         index++;
         
     }
-    
 }
 
 function validFields(dict, groupTagNumber) {
@@ -259,8 +258,6 @@ function validFields(dict, groupTagNumber) {
 
     _.each(dict.fields, function (value, key, list) {
         
-        
-        
     });
     
     return fields;
@@ -274,7 +271,6 @@ function resolveFields(fieldArray, dict) {
     var group = [];
 
     while (fieldArray.length > 0) {
-        
         var field = fieldArray.shift();
         var key = field.tag;
         var val = field.val;
@@ -290,13 +286,10 @@ function resolveFields(fieldArray, dict) {
         } else {
             
         }
-
     }
 
     return targetObj;
-
 }
-
 
 function pluckGroup(tagArray, messageType, groupName) {
 
@@ -336,7 +329,7 @@ function pluckGroup(tagArray, messageType, groupName) {
             member[key] = val;
         } else if (type === 'NUMINGROUP' || key.substring(0, 2) === 'No') { // recurse into new repeating group
 //          } else if (key.substring(0, 2) == 'No') { // recurse into new repeating group
-            console.log('GROUP: ' + key);// JSON.stringify(newGroup));
+//            console.log('GROUP: ' + key);// JSON.stringify(newGroup));
             member[key] = val;
             var newGroup = pluckGroup(tagArray, messageType, key);
             member[key.substring('No'.length)] = newGroup;
