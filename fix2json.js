@@ -28,6 +28,8 @@ let options = checkParams();
 try {
 
     let dict = readDataDictionary(options.dict);
+    //  console.log(JSON.stringify(dict, undefined, 2));
+    //    process.exit();
     var input;
     if (options.file) {
         if (options.file.substring(filename.length - 3).toLowerCase() === '.gz') {
@@ -49,7 +51,7 @@ try {
     rd.on('line', function(line) {
         if (line.indexOf(delim) > -1) {
             var msg = decoder.write(processLine(line, options, dict));
-            //console.log(msg);
+            console.log(msg);
         }
     });
 
@@ -90,11 +92,19 @@ function checkParams() {
 }
 
 function prune(array) {
+    
+    if (!array) { return undefined }
     let output = [];
     _.each(array, function (value, key, list) {
-         output.push(value.$);
+        let newObj = _.clone(value.$);
+        _.each(Object.keys(value), function (v, k, l) {
+            if (v !== '$') {
+                newObj[v] = value[v];
+            }
+        });
+        output.push(newObj);
     });
-    return output;
+    return output; 
 }
 
 function readDataDictionary(fileLocation) {
@@ -112,79 +122,33 @@ function readDataDictionary(fileLocation) {
         }
     });
 
-    console.log(util.inspect(dict, undefined, null));
+    //    console.log(JSON.stringify(dict, undefined, 2));
     return dict;
 }
 
 function makeDict(datadict) {
     
-    let messages = datadict.fix.messages[0].message;
-    let fields = datadict.fix.fields[0].field;
+    let messages = prune(datadict.fix.messages[0].message);
+    let fields = prune(datadict.fix.fields[0].field);
+    let components = prune(datadict.fix.components[0].component);
     let version = Number(datadict.fix.$.major);
-    let components, groups = undefined;
 
-    if (version === 5) {
-        components = prune(datadict.fix.components[0].component);
-    } else {
-        groups = prune(datadict.fix.fields[0].group);
-    }
-    
     let dict = {};
-    let msgs = [];
-    let flds = [];
-    let grps = [];
-    
-    // process message defs
-    _.each(messages, function(value, key, list) {
+    dict.messages = messages;
+    dict.fields = fields;
+    dict.components = components;
 
-        // check current message for groups
-        // for each of those groups,
-        // check the group for fields.
-        // create msg.group.fields
-        // alongside msg.fields
+  //  _.each(components, function (v, k, l) {
+//        console.log('component fields for ' + v.name + ': ' + util.inspect(componentFields(v.name, dict)));
+    //});
 
-        let items = [];
-        let msg = value.$
-        msg.fields = prune(value.field);
-        if (version === 4) {
-            let grp = {};
-            if (value.group) {
-                _.each(value.group, function (v, k, l) {
-                    let grp = v.$;
-                    grp.fields = prune(v.field);
-                    grps.push(grp);
-                });
-            }
-            msg.groups = grps;
-        } else { // 5.x schema
-            if (value.component) {
-                console.log('found comp ' + util.inspect(value.component, undefined, null));
-            }
-        }
-        msgs.push(msg);
-    });
-
-    // process field defs
-    _.each(fields, function(value, key, list) {
-        let fld = value.$;
-        let values = [];
-        _.each(value.value, function(v, k, l) {
-            values.push(v.$);
-        });
-        fld.values = values;
-        flds.push(fld);
-    });
-    
-    dict.messages = msgs;
-    dict.fields = flds;
-
-//    console.log(JSON.stringify(dict, undefined, 2));
+//    process.exit(0);
     return dict;
     
 }
 
 function processLine(line, options, dict) {
-    var targetObj = resolveFields(extractFields(line, dict), dict);
+    var targetObj = structure(extractFields(line, dict), dict);
     if (options.yaml) {
         return YAML.stringify(targetObj, 256);
     } else {
@@ -209,86 +173,276 @@ function extractFields(record, dict) {
             let field = {
                 tag: tag,
                 val: val,
-                num: fieldNum,
+                num: Number(fieldNum),
                 raw: rawVal
             }
             fieldArray.push(field);
         }
     }
+    console.log(JSON.stringify(fieldArray, 2, 2));
     return fieldArray;
 }
 
-function makeGroup(fieldArray, messageDefs, groupNum) {
+function makeGroup(fieldArray, dict, groupDef) {
     let index = 0;
     let grpVals = [];
     let anchor = undefined;
-    let grp = {};
+    let grpItem = {};
+
+ //   let grpDef = _.findWhere(dict.groups, { name: groupNum })
+    let grpFlds = prune(groupDef.field);
+    
+    // assumes the field array passed starts with the
+    // first tag of the first item in the group
+    // and contains the entire rest of the message
     
     while (fieldArray.length > 0) {
 
         let field = fieldArray.shift();
-       
+
         if (index === 0) {
+            console.log('group anchor field is ' + field.tag);
             anchor = field.tag;
-            grp[field.tag] = field.val;
+            grpItem[field.tag] = field.val;
         } else if (field.tag === anchor) {
-            grpVals.push(grp);
-            grp = {};
-        } else if (isGroup(field, messageDefs)) {
-            grp = makeGroup(fieldArray, messageDefs, field.num);
-            grp[field.tag.substring('No'.length)] = grp;
+            console.log('adding new item to group');
+            grpVals.push(grpItem);
+            grpItem = {};
+            grpItem[field.tag] = field.val;
+        } else if (isGroup(field, dict.fields)) {
+            console.log('found subgroup: ' + field.tag);
+            let obj =  makeGroup(fieldArray, dict, _.findWhere(prune(groupDef.group), { name: field.tag }));
+            grpItem[field.tag.substring('No'.length)] = obj.group;
+            fieldArray = obj.fieldsLeft;
+        } else if (!_.findWhere(grpFlds, { name: field.tag }))  {
+            console.log(field.tag + ' not found in group ' + util.inspect(grpFlds, undefined, null) + ', this group is done');
+            grpVals.push(grpItem);
+            fieldArray.push(field);
+            return { group: grpVals,
+                     fieldsLeft: fieldArray};
         } else {
-                grp[field.tag] = field.val;
+            console.log('just adding property to item');
+            grpItem[field.tag] = field.val;
         }
 
         index++;
-        
+
     }
-}
 
-function validFields(dict, groupTagNumber) {
-
-    // find message children
-    // for each component, drill down and flatten recursively
-    // for each group, pull out child fields and flatten
-
-    let fields = [];
-
-    console.log('find ' + groupTagNumber + ' in ' + util.inspect(Object.keys(dict.fields), undefined, null));
-
-    _.each(dict.fields, function (value, key, list) {
-        
-    });
-    
-    return fields;
-    
+    console.log('group made: ' + util.inspect(grpVals, undefined, null));
+    return { group: grpVals,
+             fieldsLeft: fieldArray };
     
 }
 
-function resolveFields(fieldArray, dict) {
 
-    targetObj = {};
-    var group = [];
+// returns 
+function flatten(groupOrComponent, msgDef, dict) {
+    
+    let outFields = [];
 
-    while (fieldArray.length > 0) {
-        var field = fieldArray.shift();
-        var key = field.tag;
-        var val = field.val;
-        var raw = field.raw;
-        var num = field.num;
-        
-        targetObj[key] = val;
+    if (groupOrComponent.field) { // sub-fields for this message def, may be 0
+        outFields = prune(groupOrComponent.field);
+    }
 
-        if (isGroup(field, dict.fields)) {
-            let grp = makeGroup(fieldArray, dict.messages, field.num);
-            targetObj[key.substring(2)] = grp; // Strip prefix 'No' from numingroup
-            //console.log('GROUP: ' + field.tag + '/' + field.val);
-        } else {
-            
+    let groups = prune(groupOrComponent.group); // groups may be wrapped in a component, 1-to-1
+    if (groups) {                               
+        if (groups != undefined) {
+            console.log("flatten: found group " + util.inspect(groups, undefined, null));
+            _.each(groups, function (v, k, l) {
+                outFields = outFields.concat(flatten(v, msgDef, dict)); 
+            });
         }
     }
 
+    let comps = prune(groupOrComponent.component); // components have groups/fields, and/or other components
+    if (comps) {
+        if (comps != undefined) {
+            console.log("flatten: found component " + util.inspect(comps, undefined, null));
+            _.each(comps, function (v, k, l) {
+                outFields = outFields.concat(flatten(v, msgDef, dict));
+            });
+        }
+    }
+    
+    return outFields;
+    
+}
+
+function componentDefiniton(name, dict) {
+
+    return prune(_.findWhere(dict.components, { name: name }));
+    
+}
+
+function pluckGroup(groupName, fields, dict) {
+
+    let group = {};
+    let fieldsLeft = [];
+    let inGroup = true;
+    let idx = 0;
+    
+    while (inGroup) {
+
+        let field = fields.shift;
+        let anchor = undefined;
+        let groupItem = {};
+        
+        if (!anchor) {
+            anchor = field.tag;
+            
+            groupItem[field.tag] = field.val;
+        } else {
+            
+        }
+        
+        idx++;
+        
+    }
+
+    
+    return { group: groupObj,
+             fields: fieldsLeft }
+    
+}
+
+function structure(fieldArray, dict) {
+
+    let MSGTYPE_TAG = 35;
+    let targetObj = {};
+    let group = [];
+
+    let type = _.findWhere(fieldArray, { num: 35 })
+    let msgDef = _.findWhere(dict.messages, { msgtype: type.raw });
+    if (!msgDef) { 
+        console.error('Could not find message type ' + type.raw + ' in data dictionary ' + options.file);
+        return fieldArray;
+    } else {
+        console.log(util.inspect(msgDef, undefined, null));
+    }
+    let grps = prune(msgDef.group);
+    let cmps = msgDef.component ? prune(msgDef.component) : [];
+    
+    console.log('grps for ' + msgDef.name + ' are ' + util.inspect(grps, undefined, null));
+    console.log('cmps for ' + msgDef.name + ' are ' + util.inspect(cmps, undefined, null));
+
+    _.each(cmps, function (v, k, l) {
+        console.log('component grps for ' + v.name + ': ' + util.inspect(componentGroups(v.name, dict), undefined, null));
+        console.log(v.name + ': ' + JSON.stringify(componentFields(v.name, dict)));
+    });
+
+    
+    while (fieldArray.length > 0) {
+
+        let field = fieldArray.shift();
+        let fieldDef = _.findWhere(dict.fields, { number: String(field.num) });
+        console.log('fielddef: ' + util.inspect(fieldDef, undefined, null));
+        console.log('fieldval: ' + util.inspect(field, undefined, null));
+        
+//        if (fieldDef && fieldDef.type === 'NUMINGROUP') {
+//            console.log('this a group: ' + field.tag + ' | ' + JSON.stringify((grps ? grps : componentGroups(cmps)), undefined, null))
+
+        let groupDef;
+        if (groupDef = isGroup(grps, field.tag)) {
+                    
+            if (!groupDef && cmps.length > 0) {
+                // check to see if the group is defined underneath one of the component definitons for the message
+
+                let g = componentGroups(field.tag, dict);
+                console.log('cmp grp: ' + util.inspect(g, undefined, null));
+
+                if (g.length > 0) {
+                    _.each(g, function (v, k, l) {
+                        console.log('grp: ' + util.inspect(v, undefined, null));
+                    });
+                }
+                                
+            }
+            
+            if (groupDef) {
+                                           
+                console.log('grpdef: ' + util.inspect(groupDef, undefined, null));
+                console.log('grpfld: ' + util.inspect(groupFields(groupDef.name, dict), undefined, null));
+
+                let fields = prune(groupDef.field);
+                let components = prune(groupDef.component);
+
+                
+                targetObj[fieldDef.name] = field.val;
+                let obj = makeGroup(fieldArray, dict, groupDef);
+                console.log('adding group: ' + fieldDef.name.substring(2) + ' as ' + util.inspect(obj.group, undefined, null));
+                targetObj[fieldDef.name.substring(2)] = obj.group;
+                console.log('fields left: ' + obj.fieldsLeft.length);
+                fieldArray = obj.fieldsLeft;
+
+            } else {
+                console.log('WTF is the group?');
+                let mnemonic = _.findWhere(prune(fieldDef.value), { enum: field.raw });
+                targetObj[fieldDef.name] = mnemonic ? mnemonic.value : field.description;
+            }
+        } else {
+            if (fieldDef && fieldDef.value) {
+                let mnemonic = _.findWhere(prune(fieldDef.value), { enum: field.raw });
+                targetObj[field.tag] = mnemonic ? mnemonic.val : field.val;
+            } else {
+                targetObj[field.tag] = field.raw;
+            }
+        }
+    }
     return targetObj;
+}
+
+function groupFields(name, dict) {
+
+    let flds = [];
+    let grp = _.findWhere(dict.groups, { name: name });
+    
+    _.each(prune(grp.field), function (v, k, l) {
+        flds.push(v);
+    });
+    _.each(prune(grp.group), function (v, k, l) {
+        flds.concat(groupFields(v.name, dict));
+    });
+    _.each(prune(grp.component), function (v, k, l) {
+        flds.concat(componentFields(v.name, dict));
+    });
+
+    return flds;
+    
+}
+
+function componentGroups(name, dict) {
+
+    
+//    console.log('find ' + name + ' in ' + JSON.stringify(dict.components, 2, 2));
+    
+    let comp = _.findWhere(dict.components, { name: name });
+    if (comp && comp.group) {
+        return prune(comp.group);
+    } else {
+        return [];
+    }
+}
+
+function componentFields(name, dict) {
+    let comp = _.findWhere(dict.components, { name: name });
+    let fields = [];
+    if (comp && (comp.field || comp.component || comp.group)) {
+        _.each(prune(comp.component), function (v, k , l) {
+            fields.concat(componentFields(v, dict));
+        });
+        _.each(prune(comp.group), function (v, k , l) {
+            fields.concat(groupFields(v, dict));
+        });
+        return comp.field ? prune(comp.field).concat(fields) : fields;
+    } else {
+        return [];
+    }
+}
+
+function subComponents(name, dict) {
+    let comps = _.findWhere(dict.components, { name: name });
+    return prune(comps.component);
 }
 
 function pluckGroup(tagArray, messageType, groupName) {
@@ -328,8 +482,8 @@ function pluckGroup(tagArray, messageType, groupName) {
             member = {};
             member[key] = val;
         } else if (type === 'NUMINGROUP' || key.substring(0, 2) === 'No') { // recurse into new repeating group
-//          } else if (key.substring(0, 2) == 'No') { // recurse into new repeating group
-//            console.log('GROUP: ' + key);// JSON.stringify(newGroup));
+            //          } else if (key.substring(0, 2) == 'No') { // recurse into new repeating group
+            //            console.log('GROUP: ' + key);// JSON.stringify(newGroup));
             member[key] = val;
             var newGroup = pluckGroup(tagArray, messageType, key);
             member[key.substring('No'.length)] = newGroup;
@@ -350,7 +504,7 @@ function pluckGroup(tagArray, messageType, groupName) {
 
 function groupFields(tagNumber, dict) {
 
-//    let msgDef = _.findWhere(dict.fie
+    //    let msgDef = _.findWhere(dict.fie
     
 }
 
@@ -360,14 +514,8 @@ function mnemonify(values, raw) {
     return value ? value.description.replace(/_/g, ' ') : raw;
 }
 
-function isGroup(field, fields) {
-    let fieldDef = _.findWhere(fields, { number: field.num });
-    fieldDef = _.findWhere(fields, { number: field.num });
-    return fieldDef ? (fieldDef.type === 'NUMINGROUP' ? true : false) : false;
-}
 
-
-function flatten(component, dict) {
-
+function isGroup(groupList, tag) {
+    return _.findWhere(groupList, { name: tag });
 }
 
