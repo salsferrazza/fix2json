@@ -29,6 +29,10 @@ const options = checkParams();
 try {
     
     let dict = readDataDictionary(options.dictpath);
+
+  //  console.log(JSON.stringify(flatten('UndInstrmtGrp', dict)));
+//    process.exit(0);
+    
     let input;
     if (options.file) {
         if (options.file.substring(options.file.length - 3).toLowerCase() === '.gz') {
@@ -51,7 +55,7 @@ try {
         if (line.indexOf(delim) > -1) {
             processLine(line, options, dict, function (msg) {
 //                decoder.write(
-                console.log(YAML.stringify(msg));
+                console.log(YAML.stringify(msg, 5, 1));
             });
         }
     });
@@ -139,41 +143,61 @@ function makeDict(datadict) {
     dict.messages = messages;
     dict.fields = fields;
     dict.components = components;
-
-//    console.log(JSON.stringify(dict));
-  //  process.exit(0);
     
     return dict;
 
 }
 
-function makeObject(fieldList, dict, callback) {
+function hasField(groupDef, fieldName) {
 
+    if (_.findWhere(groupDef.fields, { name: fieldName })) {
+        console.log('found ' + fieldName + ' in ' + util.inspect(groupDef.fields));
+        return true;
+    }    
+    if (groupDef.components) {
+        for (let i = 0; i < groupDef.components; i++) {
+            const cmp = groupDef.components[i];
+            if (_.findWhere(cmp.field, { name: fieldName })) {
+                console.log('found ' + fieldName + ' in ' + util.inspect(groupDef.components));
+                return true;
+            }
+        }
+    }
+    return false;    
 }
 
-function resolveField(field, dict, callback) {
-    let fld = { tag: field.tag , 
-                val: undefined };
-    const def = _.findWhere(dict.fields, { name: field.tag });
-    if (def) {
-        if (def.type === 'NUMINGROUP') {
-            targetObj[field.tag] = field.raw;
-            makeGroup(fieldList, def, field, dict, function (group, fieldsLeft) {
-                callback(group, fieldsLeft);
-            });
-        } else {
-            callback(mnemonify(def, field.raw));
+function flatten(componentName, dict) {
+
+    let fields = [];
+    const comp = _.findWhere(dict.components, { name: componentName });
+
+    if (!comp) { return undefined; };
+
+    if (comp.field) {
+        for (let i = 0; i < comp.field.length; i++) {
+            fields.push(comp.field[1].name);
         }
-    } else {
-        callback(field.raw);
     }
-    return;
+    
+    if (comp.component) {
+        
+        for (let j = 0; j < comp.component.length; i++) {
+            if (comp.component[j]) {
+                fields.push(comp.component[j].field);
+            }
+            for (let k = 0; k < comp.component[j].component.length; k++) {
+                fields.push(flatten(comp.component[j].component.name));
+            }
+        }
+    }
+    return fields;
 }
 
 function makeGroup(fieldArray, msgDef, groupName, dict, callback) {
 
     const groupDef = findGroupDef(groupName, msgDef, dict);
-
+                             
+    
     if (!groupDef) {
         console.log('NO GROUP DEF FOR ' + groupName);
         callback(undefined);
@@ -188,57 +212,46 @@ function makeGroup(fieldArray, msgDef, groupName, dict, callback) {
     let item = {};
 
     while (fieldList.length > 0) {
-
+                         
         const field = fieldList.shift();
-        const fieldDef = _.findWhere(dict.fields, { name: field.tag });
-        console.log('got fieldDef ' + util.inspect(fieldDef) + '/' + util.inspect(field));
-        console.log(field.tag + ' def: ' + YAML.stringify(_.findWhere(groupDef.fields, { name: field.tag })));
-        
-        if (!anchor) {
 
+        console.log(groupName + ' has field ' + field.tag + ': ' + hasField(groupDef, field.tag)); 
+ 
+
+        const fieldDef = _.findWhere(dict.fields, { name: field.tag });
+        if (!anchor) {
             anchor = field.tag;
             console.log('set anchor to ' + anchor);
             item[field.tag] = field.val;
             console.log('item: ' + util.inspect(item));
-            
-                    
         } else if (field.tag === anchor) {
-
-            console.log('new item: ' + util.inspect(item));
             items.push(JSON.parse(JSON.stringify(item))); // TODO: fix ugly
             item = {};
             item[field.tag] = field.val;
-            console.log('item: ' + util.inspect(item));
-            
+            console.log('new item: ' + util.inspect(item));
         } else if (fieldDef.type === 'NUMINGROUP') { // nested group
-
             item[field.tag] = field.raw;
             console.log('nested group ' + field.tag);
             makeGroup(fieldList, msgDef, field.tag, dict, function (group, remainingFields) {
                 items[field.tag.substring('No'.length)] = group;
                 fieldList = remainingFields;
             });
-        
-        } else if (!_.findWhere(groupDef.fields, { name: field.tag })) {
-
+//        } else if (!_.findWhere(groupDef.fields, { name: field.tag })) {
+        } else if (!hasField(groupDef, field.tag)) {
+            console.log('\n\n' + field.tag + ' not in ' + JSON.stringify(groupDef) + '\n\n');
             fieldList.push(field);
             console.log('item: ' + util.inspect(item));
             items.push(JSON.parse(JSON.stringify(item)));
             console.log('fields left: ' + YAML.stringify(fieldList));
             callback(items, fieldList);
             return;
-            
         } else {
             console.log('normal: ' + field.tag + ' = ' + field.val);
             item[field.tag] = field.val;
         }
-        
     }
-
-    console.log('grp items: ' + JSON.stringify(items));
     callback(items, fieldList);
     return;
-
 }
 
 function processLine(line, options, dict, callback) {
@@ -265,6 +278,7 @@ function processLine(line, options, dict, callback) {
                     console.log('bck from mg: ' + YAML.stringify(group));                        
                     targetObj[field.tag.substring('No'.length)] = group;
                     fieldList = fieldsLeft ? fieldsLeft.slice(0) : [];
+                    console.log('fieldleft: ' + JSON.stringify(fieldList));
                 });
             } else {
                 targetObj[field.tag] = field.val;
@@ -302,88 +316,23 @@ function extractFields(record, dict, cb) {
     return;
 }
 
-function componentFields(componentName, dict) {
-
-    let fields = [];
-
-    const compDef = _.findWhere(dict.components, { name: componentName });
-//    console.log(componentName + ': ' + JSON.stringify(compDef));
-
-    if (!compDef) { return fields; } 
-    
-    if (compDef && compDef.group) {
-        const grp = prune(compDef.group);
-        fields = fields.concat(prune(grp.field));
-//        console.log('compf: ' + YAML.stringify(fields));
-
-        if (compDef.group.component) {
-            compDef.group.component.forEach(function (cmp) {
-                fields = fields.concat(componentFields(cmp.name, dict));
-            });
-        }
-    }
-    
-    if (compDef && compDef.field) {
-        fields = fields.concat(prune(compDef.field));
-//        console.log('compf: ' + YAML.stringify(fields));
-    }
-        
-    if (compDef && compDef.component) {
-        _.each(prune(compDef.component), function (val, key, list) {
-            fields = fields.concat(componentFields(val.name, dict)); 
-           // console.log('compf: ' + YAML.stringify(fields));
-        });
-    }
-
-//    console.log('returning from cf: ' + YAML.stringify(fields));
-    return fields;
-}
-
-function groupFields(msgDef, groupName, dict) {
-    // pass in group
-    // get components and fields
-    // copy fields 
-    let fields = [];
-    // const cmpList = prune(msgDef.component);
-//    console.log('fields for: ' + groupName);
-    const groupDef = findGroupDef(groupName, msgDef, dict);
-  //  console.log('gf: ' + YAML.stringify(groupDef, 1, 1));
-
-    if (groupDef && groupDef.field) {
-        fields = fields.concat(prune(groupDef.field));
-    }
-
-    if (groupDef && groupDef.component) {
-        _.each(prune(groupDef.component), function (v, k, l) {
-            if (v.field) {
-                fields = fields.concat(prune(v.field));
-            }
-            if (v.component) {
-                fields = fields.concat(componentFields(prune(v.component)));
-            }
-        });
-    }
-
-//    console.log('group fields: ' + YAML.stringify(fields));
-    
-    return fields;
-}
-
 
 function findGroupDef(groupName, msgDef, dict) {
     
     const def = _.findWhere(dict.messages, { name: msgDef.name });
-    console.log('fgf msg: ' + YAML.stringify(def));
+    console.log('gdf msg: ' + YAML.stringify(def));
     const comps = prune(msgDef.component);
+    const grps = prune(msgDef.group);
 
     if (comps && comps.length > 0) {
         for (let i = 0; i < comps.length; i++) {
             const comp = comps[i];
-            console.log('comp: ' + JSON.stringify(comp));
-            const compDef = _.findWhere(dict.components, { name: comp.name });
+            console.log('comp: ' + JSON.stringify(comp, 1, 1)); 
+            const compDef = _.findWhere(dict.components, { name: comp.name })
+            console.log('comp def: ' + JSON.stringify(compDef, 1, 1));
+            
             if (compDef && compDef.group) {
                 const grps = prune(compDef.group);
-
                 for (let j = 0; j < grps.length; j++) {                    
                     const grp = grps[j];
                     if (grp.name === groupName) {                    
@@ -397,111 +346,33 @@ function findGroupDef(groupName, msgDef, dict) {
                     }
                 }
             } else {
-                console.log('no compdef found for ' + comp.name);
+                console.log('no groups found in component ' + comp.name);
                 continue;
             }
         }
-    } else {
-        console.log('msgDef ' + msgDef.name + ' has no components');
-    }
-}
-
-function structure(fieldArray, dict) {
-
-    const MSGTYPE_TAG = 35;
-    let targetObj = {};
-    let fieldList = fieldArray.slice(0);
-
-//    console.log(JSON.stringify(fieldList, 2, 2));
-    
-    const type = _.findWhere(fieldList, { num: MSGTYPE_TAG })
-    const msgDef = _.findWhere(dict.messages, { msgtype: type.raw });
-/*
-    if (msgDef) {
-
-        _.each(prune(msgDef.field), function (v, k, l) {
-
-
-            const fieldDef = _.findWhere(dict.fields, { name: v.name })
-                  || { number: field.num,
-                       name: field.tag,
-                       type: STRING };
-
-            console.log(v.name + ': ' + JSON.stringify(fieldDef));
-
-            const val = _.findWhere(fieldList, { tag: v.name });
-
-            if (val) {
-                targetObj[v.name] = mnemonify(fieldDef, val.val);
-            }
-
-        });
-        
     }
 
-  */  
-    
-    if (msgDef) {
-        
-        while (fieldList.length > 0) {
-
-            const field = fieldList.shift(); // get next field from array
-
-            // get definition of the field in dictionary
-            // if not found, return a stub fieldDef
-            const fieldDef = _.findWhere(dict.fields, { name: field.tag })
-                  || { number: field.num,
-                       name: field.tag,
-                       type: STRING };
-
-        //    console.log(JSON.stringify(field) + ': ' + JSON.stringify(fieldDef, 2, 2));
-            
-            // if this field represents a group, then we
-            // need to branch out and deal with it
-            if (fieldDef.type === 'NUMINGROUP') {
-
-//                console.log('group coming up: ' + YAML.stringify(field));
-//                console.log(field.tag + ' def: ' + JSON.stringify(findGroupDef(field.tag, msgDef, dict)));
-                
-                // add original No* group field to document
-                targetObj[field.tag] = field.val;
-
-                // manufacture array to represent group (recursively)
-                const grp = makeGroup(fieldList,
-                                      msgDef,
-                                      field.tag,
-                                      Number(field.val),
-                                      dict);
-
-                console.log('back from make group: ' + YAML.stringify(grp));
-                
-                // trim the No* prefix off for the group property name
-                targetObj[field.tag.substring('No'.length)] = grp ? grp.group : {};
-
-                // we've exhausted fields out of the original array
-                // so we'll reset the main fieldArray to reflect this
-//                fieldList = grp.fieldsLeft;
-
-               // console.log('post group: ' + JSON.stringify(grp.fieldsLeft, 2, 2));
-
+    if (grps && grps.length > 0) {
+        console.log('size of ' + msgDef.name + ' groups is ' + grps.length);
+        for (let i = 0; i < grps.length; i++) {
+            const grp = grps[i];
+            console.log('found group: ' + grp.name + '(' + groupName + ')');
+            if (grp.name === groupName) {
+                return { 
+                    fields: prune(grp.field), 
+                    components: prune(grp.component)
+                };
             } else {
-                console.log('set ' + field.tag + ' to ' + mnemonify(fieldDef, field.val));
-                targetObj[field.tag] = mnemonify(fieldDef, field.val);
-            }           
+                console.log(grp.name + ' != ' + groupName);
+            }
         }
-    } else {
-        console.error('No definition found for message type ' + type.raw);
     }
-    return targetObj;
 }
 
 function mnemonify(fieldDef, raw) {        
     if (!fieldDef || !fieldDef.value) {
         return raw;
     } else {
-//        if (fieldDef.type === 'NUMBER') {
-  //          return Number(
-    //    }
         let value = _.findWhere(prune(fieldDef.value), { enum: raw });
         return value ? value.description.replace(/_/g, ' ') : raw;
     }
