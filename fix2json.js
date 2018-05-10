@@ -30,8 +30,8 @@ try {
     
     let dict = readDataDictionary(options.dictpath);
 
-  //  console.log(JSON.stringify(flatten('UndInstrmtGrp', dict)));
-//    process.exit(0);
+//    console.log(JSON.stringify(flatten('Instrument', dict)));
+  //  process.exit(0);
     
     let input;
     if (options.file) {
@@ -148,23 +148,37 @@ function makeDict(datadict) {
 
 }
 
-function hasField(groupDef, fieldName) {
+function hasField(groupDef, fieldName, dict) {
 
     if (_.findWhere(groupDef.fields, { name: fieldName })) {
         console.log('found ' + fieldName + ' in ' + util.inspect(groupDef.fields));
         return true;
     }    
+
     if (groupDef.components) {
         for (let i = 0; i < groupDef.components; i++) {
-            const cmp = groupDef.components[i];
-            if (_.findWhere(cmp.field, { name: fieldName })) {
-                console.log('found ' + fieldName + ' in ' + util.inspect(groupDef.components));
+            const fields = flatten(groupDef.components[i], fieldName);
+            if (fields.includes(fieldName)) {
+                console.log('found ' + fieldName + ' in ' + util.inspect(fields));
                 return true;
             }
         }
     }
+
+    if (groupDef.group) {
+        for (let i = 0; i < groupDef.group; i++) {
+            if (_.findWhere(prune(groupDef.group[i].field), { name: fieldName })) {  
+                console.log('found ' + fieldName + ' in ' + util.inspect(prune(groupDef.group[i].field)));
+                return true;
+            }
+        }
+    }
+    
+    console.log('could not find ' + fieldName + ' in ' + util.inspect(groupDef));
     return false;    
 }
+
+//function 
 
 function flatten(componentName, dict) {
 
@@ -174,36 +188,83 @@ function flatten(componentName, dict) {
     if (!comp) { return undefined; };
 
     if (comp.field) {
-        for (let i = 0; i < comp.field.length; i++) {
-            fields.push(comp.field[1].name);
+        const flds = prune(comp.field);
+        for (let i = 0; i < flds.length; i++) {
+            console.log(componentName + ' found comp.field: ' + JSON.stringify(flds[i], 1, 1));
+            fields.push(flds[i].name);
         }
+    }
+
+    if (comp.group) {
+        const grps = prune(comp.group);
+
+        for (let i = 0; i < grps.length; i++) {
+            if (grps[i].field) {
+                const flds = prune(grps[i].field);
+                for (let j = 0; j < flds.length; j++) {
+                    fields.push(flds[j].name);
+                }
+            }
+        }
+        
     }
     
     if (comp.component) {
-        
-        for (let j = 0; j < comp.component.length; i++) {
-            if (comp.component[j]) {
-                fields.push(comp.component[j].field);
-            }
-            for (let k = 0; k < comp.component[j].component.length; k++) {
-                fields.push(flatten(comp.component[j].component.name));
+        const cmps = prune(comp.component);
+        for (let j = 0; j < cmps.length; j++) {
+            fields = fields.concat(flatten(cmps[j].name, dict));
+            if (cmps[j].group) {
+                const grps = prune(cmps[j].group);
+                for (let k = 0; k < grps.length; k++) {
+                    if (grps[k].field) {
+                        const flds = prune(grps[k].field);
+                        for (let l = 0; l < flds.length; l++) {
+                            fields.push(flds[l].name);
+                        }
+                    }
+                }
             }
         }
     }
+
+    console.log(componentName + ' fields going back: ' + util.inspect(fields));
     return fields;
+
 }
+
+    
+    /*    if (comp.group) {
+        const grps = prune(comp.group);
+
+        for (let k = 0; k < grps.length; k++) {
+            fields.concat(grps[i]
+        }
+        
+        
+    }
+  */  
+            //            fields = fields.concat(prune(cmps[j].field));
+  //          console.log('found comp.component: ' + JSON.stringify(cmps[j], 1, 1));
+    //        if (cmps[j].component) {
+      //          for (let k = 0; k < cmps[j].component.length; k++) {
+        //            console.log('comp subcomp: ' + JSON.stringify(cmps[j].component[k], 1, 1));
+          //          fields = fields.concat(flatten(cmps[j].component[k].name, dict));
+            //    }
+            //}
+//        }
+  //  }
+
 
 function makeGroup(fieldArray, msgDef, groupName, dict, callback) {
 
     const groupDef = findGroupDef(groupName, msgDef, dict);
-                             
-    
+        
     if (!groupDef) {
         console.log('NO GROUP DEF FOR ' + groupName);
         callback(undefined);
         return;
     } else {
-        console.log('groupdef: ' + YAML.stringify(groupDef));
+         console.log(groupName + ': ' + YAML.stringify(groupDef));
     }
     
     let fieldList = fieldArray.slice(0);
@@ -217,7 +278,6 @@ function makeGroup(fieldArray, msgDef, groupName, dict, callback) {
 
         console.log(groupName + ' has field ' + field.tag + ': ' + hasField(groupDef, field.tag)); 
  
-
         const fieldDef = _.findWhere(dict.fields, { name: field.tag });
         if (!anchor) {
             anchor = field.tag;
@@ -236,10 +296,10 @@ function makeGroup(fieldArray, msgDef, groupName, dict, callback) {
                 items[field.tag.substring('No'.length)] = group;
                 fieldList = remainingFields;
             });
-//        } else if (!_.findWhere(groupDef.fields, { name: field.tag })) {
+            //        } else if (!_.findWhere(groupDef.fields, { name: field.tag })) {
         } else if (!hasField(groupDef, field.tag)) {
             console.log('\n\n' + field.tag + ' not in ' + JSON.stringify(groupDef) + '\n\n');
-            fieldList.push(field);
+            fieldList.unshift(field); // put this field back
             console.log('item: ' + util.inspect(item));
             items.push(JSON.parse(JSON.stringify(item)));
             console.log('fields left: ' + YAML.stringify(fieldList));
@@ -275,10 +335,10 @@ function processLine(line, options, dict, callback) {
             if (def && def.type === 'NUMINGROUP') {
                 targetObj[field.tag] = Number(field.raw);
                 makeGroup(fieldList, msgDef, field.tag, dict, function (group, fieldsLeft) {
-                    console.log('bck from mg: ' + YAML.stringify(group));                        
+                    // console.log('bck from mg: ' + YAML.stringify(group));                        
                     targetObj[field.tag.substring('No'.length)] = group;
                     fieldList = fieldsLeft ? fieldsLeft.slice(0) : [];
-                    console.log('fieldleft: ' + JSON.stringify(fieldList));
+                    // console.log('fieldleft: ' + JSON.stringify(fieldList));
                 });
             } else {
                 targetObj[field.tag] = field.val;
@@ -320,16 +380,16 @@ function extractFields(record, dict, cb) {
 function findGroupDef(groupName, msgDef, dict) {
     
     const def = _.findWhere(dict.messages, { name: msgDef.name });
-    console.log('gdf msg: ' + YAML.stringify(def));
+    // console.log('gdf msg: ' + YAML.stringify(def));
     const comps = prune(msgDef.component);
     const grps = prune(msgDef.group);
 
     if (comps && comps.length > 0) {
         for (let i = 0; i < comps.length; i++) {
             const comp = comps[i];
-            console.log('comp: ' + JSON.stringify(comp, 1, 1)); 
+            // console.log('comp: ' + JSON.stringify(comp, 1, 1)); 
             const compDef = _.findWhere(dict.components, { name: comp.name })
-            console.log('comp def: ' + JSON.stringify(compDef, 1, 1));
+            // console.log('comp def: ' + JSON.stringify(compDef, 1, 1));
             
             if (compDef && compDef.group) {
                 const grps = prune(compDef.group);
@@ -341,29 +401,29 @@ function findGroupDef(groupName, msgDef, dict) {
                             components: prune(grp.component)
                         };
                     } else {
-                        console.log(grp.name + ' != ' + groupName);
+                        // console.log(grp.name + ' != ' + groupName);
                         continue;
                     }
                 }
             } else {
-                console.log('no groups found in component ' + comp.name);
+                // console.log('no groups found in component ' + comp.name);
                 continue;
             }
         }
     }
 
     if (grps && grps.length > 0) {
-        console.log('size of ' + msgDef.name + ' groups is ' + grps.length);
+        // console.log('size of ' + msgDef.name + ' groups is ' + grps.length);
         for (let i = 0; i < grps.length; i++) {
             const grp = grps[i];
-            console.log('found group: ' + grp.name + '(' + groupName + ')');
+            // console.log('found group: ' + grp.name + '(' + groupName + ')');
             if (grp.name === groupName) {
                 return { 
                     fields: prune(grp.field), 
                     components: prune(grp.component)
                 };
             } else {
-                console.log(grp.name + ' != ' + groupName);
+                // console.log(grp.name + ' != ' + groupName);
             }
         }
     }
