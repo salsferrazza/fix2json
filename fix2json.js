@@ -1,51 +1,57 @@
-#! /usr/bin/env node --harmony
+#! /usr/bin/env node
 
-const fs = require('fs');
-const zlib = require('zlib');
-const util = require('util');
-const xpath = require('xpath');
-const _ = require('underscore');
-const DOMParser = require('xmldom').DOMParser;
-const readline = require('readline');
-const StringDecoder = require('string_decoder').StringDecoder;
-const YAML = require('yamljs');
-const decoder = new StringDecoder();
-const pretty = false;
-const yaml = false;
+var fs = require('fs');
+var zlib = require('zlib');
+var util = require('util');
+var xpath = require('xpath');
+var _ = require('underscore');
+var DOMParser = require('xmldom').DOMParser;
+var readline = require('readline');
+var StringDecoder = require('string_decoder').StringDecoder;
+var YAML = require('yamljs');
+var decoder = new StringDecoder();
+var delim = String.fromCharCode(01); // ASCII start-of-header
+var pretty = false;
+var dictname;
+var filename;
+var TAGS = {};
+var GROUPS = {};
+var MESSAGES = [];
+var FIX_VER = undefined;
+var rd = {};
+var yaml = false;
+var NUMERIC_TYPES = ['FLOAT', 'AMT', 'PRICE', 'QTY', 'INT', 'SEQNUM', 'NUMINGROUP', 'LENGTH', 'PRICEOFFSET'];
 
 // some of these TODO's below are very speculative:
 //
 // TODO: decouple logic from file ingestion, but if this was a browser module, how would we package the dictionaries?
 // TODO: get dictionary management out of this module
+// TODO: XML merge for customizing data dictionaries with fragments
+// TODO: ability to hold multiple dictionaries in memory
 // TODO: autodetect FIX version from source data?
+// TODO: option to flatten groups?
 // TODO: emit pre and post processing events for each message processed
 // TODO: forward engineer JSON to FIX?  Would be pretty useful for browser UI's based on FIX dictionaries
 
-if (process.stdout._handle) process.stdout._handle.setBlocking(true)
-
-const delim = String.fromCharCode(01); // ASCII start-of-header
-const options = checkParams();
+checkParams();
 
 try {
-    
-    let dict = readDataDictionary(options.dictpath);
 
-//    console.log(JSON.stringify(flatten('Instrument', dict)));
-  //  process.exit(0);
-    
-    let input;
-    if (options.file) {
-        if (options.file.substring(options.file.length - 3).toLowerCase() === '.gz') {
-            input = fs.createReadStream(options.file)
+    readDataDictionary(dictname);
+
+    let input = undefined;
+    if (filename) {
+        if (filename.substring(filename.length - 3).toLowerCase() === '.gz') {
+            input = fs.createReadStream(filename)
                 .pipe(zlib.createGunzip());
         } else {
-            input = fs.createReadStream(options.file);
+            input = fs.createReadStream(filename);
         }
     } else {
-        input = process.stdin;
+		    input = process.stdin;
     }
-
-    let rd = readline.createInterface({
+	
+    rd = readline.createInterface({
         input: input,
         output: process.stdout,
         terminal: false
@@ -53,387 +59,330 @@ try {
 
     rd.on('line', function(line) {
         if (line.indexOf(delim) > -1) {
-            processLine(line, options, dict, function (msg) {
-//                decoder.write(
-                console.log(YAML.stringify(msg, 5, 1));
-            });
+            var msg = decoder.write(processLine(line));
+            console.log(msg);
         }
     });
 
 } catch (mainException) {
-    console.error("Error in main routine: " + mainException.stack);
+    console.error("Error in main routine: " + mainException);
     process.exit(1);
 }
 
-function checkParams() {
+function pluckGroup(tagArray, messageType, groupName) {
 
-    let options = {};
+	  var groupAnchor;
+    var group = [];
+    var member = {};
+    var firstProp = undefined;
+    var idx = 0;
+    var groupFields = GROUPS[messageType][groupName];
+
+    const msg = _.findWhere(MESSAGES, { name: messageType });
+ //   const tags - _.findWhere(TAGS, { 
+    
+//    console.log(messageType + ' groups: ' + JSON.stringify(msg,1 ,1));
+    
+    if (tagArray && tagArray.length > 0) {
+        groupAnchor = tagArray[0].tag;
+    }
+/*    } else {
+        console.error('empty tag array found in pluckGroup');
+        return { group: [], fieldsLeft: tagArray };
+    }
+*/
+    while (tagArray.length > 0) {
+
+		    var tag = tagArray.shift();
+        var key = tag.tag;
+        var val = tag.val;
+        var num = tag.num;
+
+        var tagInGroup = _.contains(groupFields, key);
+		    var type;
+		
+		    if (TAGS[num]) {
+	    	    type = TAGS[num].type ? TAGS[num].type : 'STRING';
+		    } else {
+			      type = 'STRING';
+		    }
+		
+        if (idx > 0 && key === groupAnchor) { // add current member to group, reset member
+            group.push(_.clone(member));
+            member = {};
+            member[key] = val;
+        } else if (type === 'NUMINGROUP') { // recurse into new repeating group
+            member[key] = val;
+            if (val > 0) {
+                var newGroup = pluckGroup(tagArray, messageType, key);
+                member[key.substring('No'.length)] = newGroup.group;
+                tagArray = newGroup.fieldsLeft;
+            }
+        } else if (!tagInGroup) { // we've reached the end of the group
+//            console.log(key + ' is not in group ' + groupName + ': ' + JSON.stringify(groupFields,1,1)); 
+            group.push(_.clone(member)); // add the last processed member to the group
+            tagArray.unshift(tag); // put this guy back, he doens't belong here
+            return { group: group, fieldsLeft: tagArray };
+        } else {
+            member[key] = val; // tag is a member of an in-flight group
+        }
+		
+        idx++;
+
+	}
+	
+}
+
+function resolveFields(fieldArray) {
+
+    targetObj = {};
+    var group = [];
+
+    var msgType = _.findWhere(fieldArray, {
+        tag: 'MsgType'
+    });
+    var msgTypeName = _.findWhere(MESSAGES, {
+        type: msgType.raw
+    });
+    var refGroups = GROUPS[msgTypeName.name];
+
+    while (fieldArray.length > 0) {
+
+        const field = fieldArray.shift();
+        const key = field.tag;
+        const val = field.val;
+        const raw = field.raw;
+        const num = field.num;
+        let type = undefined;
+        
+        if (TAGS[num]) {
+	    	    type = TAGS[num].type ? TAGS[num].type : 'STRING';
+		    } else {
+			      type = 'STRING';
+		    }
+
+        if (type === 'NUMINGROUP') {
+            var newGroup = pluckGroup(fieldArray, msgTypeName.name, key);
+//            console.log(msgTypeName.name + ' ' + key + ' ' + JSON.stringify(Object.keys(refGroups), 1, 1));//key + ' is: ' + JSON.stringify(newGroup, 1, 1));
+            targetObj[key] = val;
+            targetObj[key.substring('No'.length)] = newGroup.group;
+            fieldArray = newGroup.fieldsLeft;
+        } else {
+            targetObj[key] = val;
+        }
+    }
+    return targetObj;
+}
+
+function processLine(line) {
+    var targetObj = resolveFields(extractFields(line));
+    if (yaml) {
+        return YAML.stringify(targetObj, 256);
+    } else {
+        return pretty ? JSON.stringify(targetObj, undefined, 2) : JSON.stringify(targetObj)
+    }
+}
+
+function getFields(groupName) {
+
+//    if (
+    
+}
+
+function extractFields(record) {
+
+    var fieldArray = [];
+    var fields = record.split(delim);
+    for (var i = 0; i < fields.length; i++) {
+        var both = fields[i].split('=');
+        both[0].replace("\n", '').replace("\r", '');
+        if (both[1] !== undefined && both[0] !== undefined) {
+            var val = both[1];
+            if (TAGS[both[0]] && TAGS[both[0]].type) {
+                val = _.contains(NUMERIC_TYPES, TAGS[both[0]].type) ? Number(val) : val;
+            }
+            val = mnemonify(both[0], val);
+            fieldArray.push({
+                tag: TAGS[both[0]] ? TAGS[both[0]].name : both[0],
+                val: val,
+                num: both[0],
+                raw: both[1]
+            });
+        }
+    }
+
+    return fieldArray;
+}
+
+function mnemonify(tag, val) {
+    return TAGS[tag] ? (TAGS[tag].values ? (TAGS[tag].values[val] ? TAGS[tag].values[val] : val) : val) : val;
+}
+
+function flattenComponent(componentName, dom) {
+    var fieldNames = [];
+    var components = xpath.select('//fix/components/component', dom);
+
+    if (!components || components.length === 0) {
+        console.error('could not find component: ' + componentName);
+        return fieldNames;
+    } else {
+        for (var i = 0; i < components.length; i++) {
+            var fields = components[i].getElementsByTagName('field');
+            for (var j = 0; j < fields.length; j++) {
+                fieldNames.push(fields[j].attributes[0].value);
+            }
+
+            var comps = components[i].getElementsByTagName('component');
+            for (var k = 0; k < comps.length; k++) {
+                var compName = comps[k].attributes[0].value;
+//                fieldNames = fieldNames.concat(flattenComponent(compName, dom));
+            }
+            
+        }
+        return _.uniq(fieldNames);
+    }
+}
+
+function dictionaryGroups(dom) {
+
+    var components = xpath.select('//fix/components/component', dom);
+    var componentGroupFields = {};
+
+    for (var j = 0; j < components.length; j++) {
+
+        var componentName = components[j].attributes[0].value;
+        componentGroupFields[componentName] = {};
+        var componentGroups = components[j].getElementsByTagName('group');
+     
+        for (var k = 0; k < componentGroups.length; k++) {
+            var componentGroupName = componentGroups[k].attributes[0].value;
+            componentGroupFields[componentName][componentGroupName] = [];
+            var groupFields = componentGroups[k].getElementsByTagName('field');
+
+            for (var l = 0; l < groupFields.length; l++) {
+                var fieldName = groupFields[l].attributes[0].value;
+                componentGroupFields[componentName][componentGroupName].push(fieldName);
+            }
+
+            var groupComponents = componentGroups[k].getElementsByTagName('component');
+            for (l = 0; l < groupComponents.length; l++) {
+                var compName = groupComponents[l].attributes[0].value;
+                componentGroupFields[componentName][componentGroupName] = componentGroupFields[componentName][componentGroupName].concat(flattenComponent(compName, dom));
+            }
+
+        }
+
+    }
+
+    var names = messageNames(dom);
+    var messages = xpath.select('//fix/messages/message', dom);
+
+    for (var m = 0; m < messages.length; m++) {
+        var messageName = messages[m].attributes[0].value;
+        GROUPS[messageName] = {};
+        var messageComponents = messages[m].getElementsByTagName('component');
+
+        for (let n = 0; n < messageComponents.length; n++) {
+            var componentName = messageComponents[n].attributes[0].value;
+            var groupNames = Object.keys(componentGroupFields[componentName]);
+
+            for (o = 0; o < groupNames.length; o++) { // collapse fields into GROUPS index
+                GROUPS[messageName][groupNames[o]] = componentGroupFields[componentName][groupNames[o]];
+            }
+        }
+
+        var messageGroups = messages[m].getElementsByTagName('group');
+        
+        for (let n = 0; n < messageGroups.length; n++) {
+            var groupName = messageGroups[n].attributes[0].value;
+            var groupNames = Object.keys(componentGroupFields[componentName]);
+
+            for (o = 0; o < groupNames.length; o++) { // collapse fields into GROUPS index
+                GROUPS[messageName][groupNames[o]] = componentGroupFields[componentName][groupNames[o]];
+            }
+        }
+        
+    }
+}
+
+function getFixVer(dom) {
+
+    var fixMaj = xpath.select("//fix/@major", dom)[0].value;
+    var fixMin = xpath.select("//fix/@minor", dom)[0].value;
+    var fixSp = xpath.select("//fix/@servicepack", dom)[0].value;
+    FIX_VER = [fixMaj, fixMin, fixSp].join('.');
+
+}
+
+function messageNames(dom) {
+
+    var messages = [];
+    var path = '//fix/messages/message';
+    var msgs = xpath.select(path, dom);
+    
+    for (var i = 0; i < msgs.length; i++) {
+        messages.push({
+            type: msgs[i].attributes[2].value,
+            name: msgs[i].attributes[0].value
+        });
+    }
+
+    MESSAGES = messages;
+
+}
+
+function readDataDictionary(fileLocation) {
+
+    var xml = fs.readFileSync(fileLocation).toString();
+    var dom = new DOMParser().parseFromString(xml);
+    var nodes = xpath.select("//fix/fields/field", dom);
+
+    getFixVer(dom);
+
+    for (var i = 0; i < nodes.length; i++) {
+        var tagNumber = nodes[i].attributes[0].value;
+        var tagName = nodes[i].attributes[1].value;
+        var tagType = nodes[i].attributes[2].value;
+        var valElem = nodes[i].getElementsByTagName('value');
+        var values = {};
+        for (var j = 0; j < valElem.length; j++) {
+            values[valElem[j].attributes[0].value] = valElem[j].attributes[1].value.replace(/_/g, ' ');
+        }
+        TAGS[tagNumber] = {
+            name: tagName,
+            type: tagType,
+            values: values
+        };
+    }
+
+    messageNames(dom);
+    dictionaryGroups(dom);
+
+}
+
+function checkParams() {
 
     if (process.argv.length < 3) {
         console.error("Usage: fix2json [-p] <data dictionary xml file> [path to FIX message file]");
         console.error("\nfix2json will use standard input in the absence of a message file.");
         process.exit(1);
     } else if (process.argv.length === 3) {
-        options.dictpath = process.argv[2];
+        dictname = process.argv[2];
     } else if (process.argv.length === 4) {
         if (process.argv[2] === '-p') {
-            options.pretty = true;
-            options.dictpath = process.argv[3];
+            pretty = true;
+            dictname = process.argv[3];
         } else {
-            options.dictpath = process.argv[2];
-            options.file = process.argv[3];
+            dictname = process.argv[2];
+            filename = process.argv[3];
         }
     } else if (process.argv.length === 5) {
-        options.pretty = true;
-        options.dictpath = process.argv[3];
-        options.file = process.argv[4];
+        pretty = true;
+        dictname = process.argv[3];
+        filename = process.argv[4];
     }
     if (process.argv[1].indexOf('yaml') > 0) {
-        options.yaml = true;
+        yaml = true;
     }
 
-    return options;
-
-}
-
-function prune(array) {
-    
-    if (!array) { return undefined }
-    let output = [];
-    _.each(array, function (value, key, list) {
-        let newObj = _.clone(value.$);
-        _.each(Object.keys(value), function (v, k, l) {
-            if (v !== '$') {
-                newObj[v] = value[v];
-            }
-        });
-        output.push(newObj);
-    });
-    return output; 
-}
-
-function readDataDictionary(fileLocation) {
-
-    var xml = fs.readFileSync(fileLocation).toString();
-    var parseString = require('xml2js').parseString;
-    var dict = {};
-    
-    parseString(xml, function (err, datadict) {
-        if (!err) {
-            dict = makeDict(datadict);
-        } else {
-            console.error(JSON.stringify(err));
-            process.exit(1);
-        }
-    });
-
-    return dict;
-}
-
-function makeDict(datadict) {
-
-    let messages = prune(datadict.fix.messages[0].message);
-    let fields = prune(datadict.fix.fields[0].field);
-    let components = prune(datadict.fix.components[0].component);
-    let version = Number(datadict.fix.$.major);
-
-    let dict = {};
-    let fieldMap = [];
-
-    dict.messages = messages;
-    dict.fields = fields;
-    dict.components = components;
-    
-    return dict;
-
-}
-
-function hasField(groupDef, fieldName, dict) {
-
-    if (_.findWhere(groupDef.fields, { name: fieldName })) {
-        console.log('found ' + fieldName + ' in ' + util.inspect(groupDef.fields));
-        return true;
-    }    
-
-    if (groupDef.components) {
-        for (let i = 0; i < groupDef.components; i++) {
-            const fields = flatten(groupDef.components[i], fieldName);
-            if (fields.includes(fieldName)) {
-                console.log('found ' + fieldName + ' in ' + util.inspect(fields));
-                return true;
-            }
-        }
-    }
-
-    if (groupDef.group) {
-        for (let i = 0; i < groupDef.group; i++) {
-            if (_.findWhere(prune(groupDef.group[i].field), { name: fieldName })) {  
-                console.log('found ' + fieldName + ' in ' + util.inspect(prune(groupDef.group[i].field)));
-                return true;
-            }
-        }
-    }
-    
-    console.log('could not find ' + fieldName + ' in ' + util.inspect(groupDef));
-    return false;    
-}
-
-//function 
-
-function flatten(componentName, dict) {
-
-    let fields = [];
-    const comp = _.findWhere(dict.components, { name: componentName });
-
-    if (!comp) { return undefined; };
-
-    if (comp.field) {
-        const flds = prune(comp.field);
-        for (let i = 0; i < flds.length; i++) {
-            console.log(componentName + ' found comp.field: ' + JSON.stringify(flds[i], 1, 1));
-            fields.push(flds[i].name);
-        }
-    }
-
-    if (comp.group) {
-        const grps = prune(comp.group);
-
-        for (let i = 0; i < grps.length; i++) {
-            if (grps[i].field) {
-                const flds = prune(grps[i].field);
-                for (let j = 0; j < flds.length; j++) {
-                    fields.push(flds[j].name);
-                }
-            }
-        }
-        
-    }
-    
-    if (comp.component) {
-        const cmps = prune(comp.component);
-        for (let j = 0; j < cmps.length; j++) {
-            fields = fields.concat(flatten(cmps[j].name, dict));
-            if (cmps[j].group) {
-                const grps = prune(cmps[j].group);
-                for (let k = 0; k < grps.length; k++) {
-                    if (grps[k].field) {
-                        const flds = prune(grps[k].field);
-                        for (let l = 0; l < flds.length; l++) {
-                            fields.push(flds[l].name);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    console.log(componentName + ' fields going back: ' + util.inspect(fields));
-    return fields;
-
-}
-
-    
-    /*    if (comp.group) {
-        const grps = prune(comp.group);
-
-        for (let k = 0; k < grps.length; k++) {
-            fields.concat(grps[i]
-        }
-        
-        
-    }
-  */  
-            //            fields = fields.concat(prune(cmps[j].field));
-  //          console.log('found comp.component: ' + JSON.stringify(cmps[j], 1, 1));
-    //        if (cmps[j].component) {
-      //          for (let k = 0; k < cmps[j].component.length; k++) {
-        //            console.log('comp subcomp: ' + JSON.stringify(cmps[j].component[k], 1, 1));
-          //          fields = fields.concat(flatten(cmps[j].component[k].name, dict));
-            //    }
-            //}
-//        }
-  //  }
-
-
-function makeGroup(fieldArray, msgDef, groupName, dict, callback) {
-
-    const groupDef = findGroupDef(groupName, msgDef, dict);
-        
-    if (!groupDef) {
-        console.log('NO GROUP DEF FOR ' + groupName);
-        callback(undefined);
-        return;
-    } else {
-         console.log(groupName + ': ' + YAML.stringify(groupDef));
-    }
-    
-    let fieldList = fieldArray.slice(0);
-    let anchor = undefined;
-    let items = [];
-    let item = {};
-
-    while (fieldList.length > 0) {
-                         
-        const field = fieldList.shift();
-
-        console.log(groupName + ' has field ' + field.tag + ': ' + hasField(groupDef, field.tag)); 
- 
-        const fieldDef = _.findWhere(dict.fields, { name: field.tag });
-        if (!anchor) {
-            anchor = field.tag;
-            console.log('set anchor to ' + anchor);
-            item[field.tag] = field.val;
-            console.log('item: ' + util.inspect(item));
-        } else if (field.tag === anchor) {
-            items.push(JSON.parse(JSON.stringify(item))); // TODO: fix ugly
-            item = {};
-            item[field.tag] = field.val;
-            console.log('new item: ' + util.inspect(item));
-        } else if (fieldDef.type === 'NUMINGROUP') { // nested group
-            item[field.tag] = field.raw;
-            console.log('nested group ' + field.tag);
-            makeGroup(fieldList, msgDef, field.tag, dict, function (group, remainingFields) {
-                items[field.tag.substring('No'.length)] = group;
-                fieldList = remainingFields;
-            });
-            //        } else if (!_.findWhere(groupDef.fields, { name: field.tag })) {
-        } else if (!hasField(groupDef, field.tag)) {
-            console.log('\n\n' + field.tag + ' not in ' + JSON.stringify(groupDef) + '\n\n');
-            fieldList.unshift(field); // put this field back
-            console.log('item: ' + util.inspect(item));
-            items.push(JSON.parse(JSON.stringify(item)));
-            console.log('fields left: ' + YAML.stringify(fieldList));
-            callback(items, fieldList);
-            return;
-        } else {
-            console.log('normal: ' + field.tag + ' = ' + field.val);
-            item[field.tag] = field.val;
-        }
-    }
-    callback(items, fieldList);
-    return;
-}
-
-function processLine(line, options, dict, callback) {
-    extractFields(line, dict, function (fieldArray) {
-        let targetObj = {};
-        const type = _.findWhere(fieldArray, { num: 35 });
-        const msgDef = _.findWhere(dict.messages, { msgtype: type.raw });
-        if (!type) {
-            console.error('type not found: ' + YAML.stringify(fieldArray));
-            callback(undefined);
-            return;
-        } else if (!msgDef) {
-            console.error('msgDef not found: ' + YAML.stringify(fieldArray));
-            callback(undefined);
-            return;
-        }
-        let fieldList = fieldArray.slice(0);
-        while (fieldList.length > 0) {
-            const field = fieldList.shift();
-            const def = _.findWhere(dict.fields, { name: field.tag });
-            if (def && def.type === 'NUMINGROUP') {
-                targetObj[field.tag] = Number(field.raw);
-                makeGroup(fieldList, msgDef, field.tag, dict, function (group, fieldsLeft) {
-                    // console.log('bck from mg: ' + YAML.stringify(group));                        
-                    targetObj[field.tag.substring('No'.length)] = group;
-                    fieldList = fieldsLeft ? fieldsLeft.slice(0) : [];
-                    // console.log('fieldleft: ' + JSON.stringify(fieldList));
-                });
-            } else {
-                targetObj[field.tag] = field.val;
-            }
-        }
-        callback(targetObj);
-        return;
-    });
-}
-
-function extractFields(record, dict, cb) {
-    let fieldArray = [];
-    let fields = record.split(delim);
-    for (var i = 0; i < fields.length; i++) {
-        var both = fields[i].split('=');
-        both[0].replace("\n", '').replace("\r", '');
-        if (both[1] !== undefined && both[0] !== undefined) {
-            let fieldNum = both[0].trim();
-            let rawVal = both[1].trim();
-            let fieldDef = _.findWhere(dict.fields, {
-                number: fieldNum
-            });
-            let tag = fieldDef ? fieldDef.name : fieldNum;
-            let val = mnemonify(fieldDef, rawVal); 
-            let field = {
-                tag: tag,
-                val: val,
-                num: Number(fieldNum),
-                raw: rawVal
-            }
-            fieldArray.push(field);
-        }
-    }
-    cb(fieldArray);
-    return;
-}
-
-
-function findGroupDef(groupName, msgDef, dict) {
-    
-    const def = _.findWhere(dict.messages, { name: msgDef.name });
-    // console.log('gdf msg: ' + YAML.stringify(def));
-    const comps = prune(msgDef.component);
-    const grps = prune(msgDef.group);
-
-    if (comps && comps.length > 0) {
-        for (let i = 0; i < comps.length; i++) {
-            const comp = comps[i];
-            // console.log('comp: ' + JSON.stringify(comp, 1, 1)); 
-            const compDef = _.findWhere(dict.components, { name: comp.name })
-            // console.log('comp def: ' + JSON.stringify(compDef, 1, 1));
-            
-            if (compDef && compDef.group) {
-                const grps = prune(compDef.group);
-                for (let j = 0; j < grps.length; j++) {                    
-                    const grp = grps[j];
-                    if (grp.name === groupName) {                    
-                        return { 
-                            fields: prune(grp.field), 
-                            components: prune(grp.component)
-                        };
-                    } else {
-                        // console.log(grp.name + ' != ' + groupName);
-                        continue;
-                    }
-                }
-            } else {
-                // console.log('no groups found in component ' + comp.name);
-                continue;
-            }
-        }
-    }
-
-    if (grps && grps.length > 0) {
-        // console.log('size of ' + msgDef.name + ' groups is ' + grps.length);
-        for (let i = 0; i < grps.length; i++) {
-            const grp = grps[i];
-            // console.log('found group: ' + grp.name + '(' + groupName + ')');
-            if (grp.name === groupName) {
-                return { 
-                    fields: prune(grp.field), 
-                    components: prune(grp.component)
-                };
-            } else {
-                // console.log(grp.name + ' != ' + groupName);
-            }
-        }
-    }
-}
-
-function mnemonify(fieldDef, raw) {        
-    if (!fieldDef || !fieldDef.value) {
-        return raw;
-    } else {
-        let value = _.findWhere(prune(fieldDef.value), { enum: raw });
-        return value ? value.description.replace(/_/g, ' ') : raw;
-    }
 }
