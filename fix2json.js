@@ -50,7 +50,7 @@ try {
     } else {
 		    input = process.stdin;
     }
-	
+	  
     rd = readline.createInterface({
         input: input,
         output: process.stdout,
@@ -79,18 +79,11 @@ function pluckGroup(tagArray, messageType, groupName) {
     var groupFields = GROUPS[messageType][groupName];
 
     const msg = _.findWhere(MESSAGES, { name: messageType });
- //   const tags - _.findWhere(TAGS, { 
-    
-//    console.log(messageType + ' groups: ' + JSON.stringify(msg,1 ,1));
     
     if (tagArray && tagArray.length > 0) {
         groupAnchor = tagArray[0].tag;
     }
-/*    } else {
-        console.error('empty tag array found in pluckGroup');
-        return { group: [], fieldsLeft: tagArray };
-    }
-*/
+
     while (tagArray.length > 0) {
 
 		    var tag = tagArray.shift();
@@ -100,13 +93,13 @@ function pluckGroup(tagArray, messageType, groupName) {
 
         var tagInGroup = _.contains(groupFields, key);
 		    var type;
-		
+		    
 		    if (TAGS[num]) {
 	    	    type = TAGS[num].type ? TAGS[num].type : 'STRING';
 		    } else {
 			      type = 'STRING';
 		    }
-		
+		    
         if (idx > 0 && key === groupAnchor) { // add current member to group, reset member
             group.push(_.clone(member));
             member = {};
@@ -119,18 +112,17 @@ function pluckGroup(tagArray, messageType, groupName) {
                 tagArray = newGroup.fieldsLeft;
             }
         } else if (!tagInGroup) { // we've reached the end of the group
-//            console.log(key + ' is not in group ' + groupName + ': ' + JSON.stringify(groupFields,1,1)); 
             group.push(_.clone(member)); // add the last processed member to the group
             tagArray.unshift(tag); // put this guy back, he doens't belong here
             return { group: group, fieldsLeft: tagArray };
         } else {
             member[key] = val; // tag is a member of an in-flight group
         }
-		
+		    
         idx++;
 
-	}
-	
+	  }
+	  
 }
 
 function resolveFields(fieldArray) {
@@ -163,7 +155,6 @@ function resolveFields(fieldArray) {
 
         if (type === 'NUMINGROUP') {
             var newGroup = pluckGroup(fieldArray, msgTypeName.name, key);
-//            console.log(msgTypeName.name + ' ' + key + ' ' + JSON.stringify(Object.keys(refGroups), 1, 1));//key + ' is: ' + JSON.stringify(newGroup, 1, 1));
             targetObj[key] = val;
             targetObj[key.substring('No'.length)] = newGroup.group;
             fieldArray = newGroup.fieldsLeft;
@@ -181,12 +172,6 @@ function processLine(line) {
     } else {
         return pretty ? JSON.stringify(targetObj, undefined, 2) : JSON.stringify(targetObj)
     }
-}
-
-function getFields(groupName) {
-
-//    if (
-    
 }
 
 function extractFields(record) {
@@ -235,7 +220,7 @@ function flattenComponent(componentName, dom) {
             var comps = components[i].getElementsByTagName('component');
             for (var k = 0; k < comps.length; k++) {
                 var compName = comps[k].attributes[0].value;
-//                fieldNames = fieldNames.concat(flattenComponent(compName, dom));
+                //                fieldNames = fieldNames.concat(flattenComponent(compName, dom));
             }
             
         }
@@ -253,7 +238,7 @@ function dictionaryGroups(dom) {
         var componentName = components[j].attributes[0].value;
         componentGroupFields[componentName] = {};
         var componentGroups = components[j].getElementsByTagName('group');
-     
+        
         for (var k = 0; k < componentGroups.length; k++) {
             var componentGroupName = componentGroups[k].attributes[0].value;
             componentGroupFields[componentName][componentGroupName] = [];
