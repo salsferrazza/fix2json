@@ -258,42 +258,6 @@ function flattenComponent(componentName, dom) {
     }
 }
 
-function dictionaryGroups(dom) {
-
-    let components = xpath.select('//fix/components/component', dom);
-    let componentGroupFields = {};
-
-    for (let j = 0; j < components.length; j++) {
-
-        const componentName = components[j].attributes[0].value;
-        componentGroupFields[componentName] = {};
-        const componentGroups = components[j].getElementsByTagName('group');
-        
-        for (let k = 0; k < componentGroups.length; k++) {
-            const componentGroupName = componentGroups[k].attributes[0].value;
-            GROUPS[componentGroupName] = [];
-            componentGroupFields[componentName][componentGroupName] = [];
-            const groupFields = componentGroups[k].getElementsByTagName('field');
-
-            for (let l = 0; l < groupFields.length; l++) {
-                const fieldName = groupFields[l].attributes[0].value;
-                GROUPS[componentGroupName].push(fieldName);
-                componentGroupFields[componentName][componentGroupName].push(fieldName);
-            }
-
-            const groupComponents = componentGroups[k].getElementsByTagName('component');
-            for (l = 0; l < groupComponents.length; l++) {
-                const compName = groupComponents[l].attributes[0].value;
-                const subFields = flattenComponent(compName, dom);
-                GROUPS[componentGroupName].concat(subFields);
-                componentGroupFields[componentName][componentGroupName] = componentGroupFields[componentName][componentGroupName].concat(subFields);
-            }
-
-        }
-
-    }
-    
-}
 
 function getFixVer(dom) {
     const fixMaj = xpath.select("//fix/@major", dom)[0].value;
@@ -337,8 +301,6 @@ function readDataDictionary(fileLocation) {
             values: values
         };
     }
-
-//    dictionaryGroups(dom);
 
     return dom;
     
