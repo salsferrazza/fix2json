@@ -16,7 +16,6 @@ let dictname;
 let filename;
 let TAGS = {};
 let GROUPS = {};
-let MESSAGES = [];
 let FIX_VER = undefined;
 let rd = {};
 let yaml = false;
@@ -37,7 +36,7 @@ checkParams();
 
 try {
 
-    readDataDictionary(dictname);
+    const dom = readDataDictionary(dictname);
 
     let input = undefined;
     if (filename) {
@@ -59,7 +58,7 @@ try {
 
     rd.on('line', function(line) {
         if (line.indexOf(delim) > -1) {
-            const msg = decoder.write(processLine(line));
+            const msg = decoder.write(processLine(line, dom));
             console.log(msg);
         }
     });
@@ -69,7 +68,14 @@ try {
     process.exit(1);
 }
 
-function pluckGroup(tagArray, groupName) {
+function getMessageDefinition(messageType, dom) {
+    let def = {};
+    const select = '//fix/messages/message[@msgtype=\'' + messageType + '\']';
+    let msg = xpath.select(select, dom);
+    return msg;
+}
+
+function pluckGroup(tagArray, msgDef, groupName, validFields) {
 
 	  let groupAnchor;
     let group = [];
@@ -87,11 +93,14 @@ function pluckGroup(tagArray, groupName) {
         let key = tag.tag;
         let val = tag.val;
         let num = tag.num;
-
-        const tagInGroup = _.contains(GROUPS[groupName], key);
+        let raw = tag.raw
+        
+        //        console.log(util.inspect(groupName + ': ' + GROUPS[groupName]));
+        
+        const tagInGroup = _.contains(validFields, key);
 		    let type;
 		    
-		    if (TAGS[num]) {
+		    if (TAGS[raw]) {
 	    	    type = TAGS[num].type ? TAGS[num].type : 'STRING';
 		    } else {
 			      type = 'STRING';
@@ -101,10 +110,10 @@ function pluckGroup(tagArray, groupName) {
             group.push(_.clone(member));
             member = {};
             member[key] = val;
-        } else if (type === 'NUMINGROUP') { // recurse into new repeating group
+        } else if (type === 'NUMINGROUP') { // recurse into nested repeating group
             member[key] = val;
             if (val > 0) {
-                const newGroup = pluckGroup(tagArray, key);
+                const newGroup = pluckGroup(tagArray, msgDef, key, validFields);
                 member[key.substring('No'.length)] = newGroup.group;
                 tagArray = newGroup.fieldsLeft;
             }
@@ -124,10 +133,44 @@ function pluckGroup(tagArray, groupName) {
     
 }
 
-function resolveFields(fieldArray) {
+function getMessageFields(msgDef, dom) {
+    let fields = [];
+
+    const nodes = msgDef[0].childNodes;
+
+    for (let i = 0; i < nodes.length; i++) {
+        let type;
+        let name;
+        type = nodes[i].nodeName;
+
+        if (type !== '#text') {
+            if (nodes[i].attributes) {
+                name = nodes[i].attributes[0].value;
+            } else if (nodes[i].nodeName) {
+                name = nodes[i].nodeName;
+            }
+            if (type === 'field') {
+                fields.push(name);
+            } else if (type === 'component') {
+                fields = fields.concat(flattenComponent(name, dom));
+            }
+        }
+    }
+
+    //    console.log(msgDef[0].attributes[0].value + ': ' + _.uniq(fields).length);
+    return fields;
+
+}
+
+function resolveFields(fieldArray, dom) {
 
     targetObj = {};
     let group = [];
+
+    // 35 is tag num for msgtype
+    const msgType = _.findWhere(fieldArray, { num: '35' }); 
+    let msgDef = getMessageDefinition(msgType.raw, dom);
+    let validFields = getMessageFields(msgDef, dom);
 
     while (fieldArray.length > 0) {
 
@@ -145,7 +188,7 @@ function resolveFields(fieldArray) {
 		    }
 
         if (type === 'NUMINGROUP') {
-            let newGroup = pluckGroup(fieldArray, key);
+            let newGroup = pluckGroup(fieldArray, msgDef, key, validFields);
             targetObj[key] = val;
             targetObj[key.substring('No'.length)] = newGroup.group;
             fieldArray = newGroup.fieldsLeft;
@@ -156,8 +199,8 @@ function resolveFields(fieldArray) {
     return targetObj;
 }
 
-function processLine(line) {
-    let targetObj = resolveFields(extractFields(line));
+function processLine(line, dom) {
+    let targetObj = resolveFields(extractFields(line), dom);
     if (yaml) {
         return YAML.stringify(targetObj, 256);
     } else {
@@ -241,8 +284,9 @@ function dictionaryGroups(dom) {
             const groupComponents = componentGroups[k].getElementsByTagName('component');
             for (l = 0; l < groupComponents.length; l++) {
                 const compName = groupComponents[l].attributes[0].value;
-                GROUPS[componentGroupName].concat(flattenComponent(compName, dom));
-                componentGroupFields[componentName][componentGroupName] = componentGroupFields[componentName][componentGroupName].concat(flattenComponent(compName, dom));
+                const subFields = flattenComponent(compName, dom);
+                GROUPS[componentGroupName].concat(subFields);
+                componentGroupFields[componentName][componentGroupName] = componentGroupFields[componentName][componentGroupName].concat(subFields);
             }
 
         }
@@ -268,6 +312,16 @@ function readDataDictionary(fileLocation) {
 
     getFixVer(dom);
 
+    // messages have fields, components and groups (4.x?)
+    // fields have tags
+    // components have fields and groups
+    // find all components
+    // list their direct child fields 
+    // figure out which component a particular group field belongs to
+    // if in nested repeating group, must know context of current group name
+    // just knowing all the possible fields under a particular message is not smart enough
+    
+    
     for (let i = 0; i < nodes.length; i++) {
         const tagNumber = nodes[i].attributes[0].value;
         const tagName = nodes[i].attributes[1].value;
@@ -284,8 +338,10 @@ function readDataDictionary(fileLocation) {
         };
     }
 
-    dictionaryGroups(dom);
+//    dictionaryGroups(dom);
 
+    return dom;
+    
 }
 
 function checkParams() {
