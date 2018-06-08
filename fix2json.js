@@ -15,22 +15,12 @@ let pretty = false;
 let dictname;
 let filename;
 let TAGS = {};
-let GROUPS = {};
+let MESSAGES = {};
 let FIX_VER = undefined;
 let rd = {};
 let yaml = false;
 const NUMERIC_TYPES = ['FLOAT', 'AMT', 'PRICE', 'QTY', 'INT', 'SEQNUM', 'NUMINGROUP', 'LENGTH', 'PRICEOFFSET'];
-
-// some of these TODO's below are very speculative:
-//
-// TODO: decouple logic from file ingestion, but if this was a browser module, how would we package the dictionaries?
-// TODO: get dictionary management out of this module
-// TODO: XML merge for customizing data dictionaries with fragments
-// TODO: ability to hold multiple dictionaries in memory
-// TODO: autodetect FIX version from source data?
-// TODO: option to flatten groups?
-// TODO: emit pre and post processing events for each message processed
-// TODO: forward engineer JSON to FIX?  Would be pretty useful for browser UI's based on FIX dictionaries
+let STATS = {};
 
 checkParams();
 
@@ -61,6 +51,18 @@ try {
             const msg = decoder.write(processLine(line, dom));
             console.log(msg);
         }
+    });
+    
+    rd.on('close', () => {
+        let total = 0;
+        console.error('\nSummary:\n');
+        Object.keys(STATS).map(function (item) {
+            total += STATS[item];
+            console.error(`${item}: ${STATS[item]}`);
+        });
+        console.error(`${Object.keys(STATS).length} message types processed.`);
+        console.error(`${total} total messages processed.`);
+        process.exit(0);
     });
 
 } catch (mainException) {
@@ -95,7 +97,8 @@ function pluckGroup(tagArray, msgDef, groupName, validFields) {
         let num = tag.num;
         let raw = tag.raw
         
-        //        console.log(util.inspect(groupName + ': ' + GROUPS[groupName]));
+        //        console.log(util.inspect(validFields));
+
         
         const tagInGroup = _.contains(validFields, key);
 		    let type;
@@ -119,7 +122,7 @@ function pluckGroup(tagArray, msgDef, groupName, validFields) {
             }
         } else if (!tagInGroup) { // we've reached the end of the group
             group.push(_.clone(member)); // add the last processed member to the group
-            tagArray.unshift(tag); // put this guy back, he doens't belong here
+            tagArray.unshift(tag); // put this guy back, he doesn't belong here
             return { group: group, fieldsLeft: tagArray };
         } else {
             member[key] = val; // tag is a member of an in-flight group
@@ -134,32 +137,35 @@ function pluckGroup(tagArray, msgDef, groupName, validFields) {
 }
 
 function getMessageFields(msgDef, dom) {
-    let fields = [];
+    let fields = MESSAGES[msgDef[0].attributes[0].value] || [];
 
-    const nodes = msgDef[0].childNodes;
+    if (fields.length == 0) {
+        const nodes = msgDef[0].childNodes;
 
-    for (let i = 0; i < nodes.length; i++) {
-        let type;
-        let name;
-        type = nodes[i].nodeName;
+        for (let i = 0; i < nodes.length; i++) {
+            let type;
+            let name;
+            type = nodes[i].nodeName;
 
-        if (type !== '#text') {
-            if (nodes[i].attributes) {
-                name = nodes[i].attributes[0].value;
-            } else if (nodes[i].nodeName) {
-                name = nodes[i].nodeName;
-            }
-            if (type === 'field') {
-                fields.push(name);
-            } else if (type === 'component') {
-                fields = fields.concat(flattenComponent(name, dom));
+            if (type !== '#text') {
+                if (nodes[i].attributes) {
+                    name = nodes[i].attributes[0].value;
+                } else if (nodes[i].nodeName) {
+                    name = nodes[i].nodeName;
+                }
+                if (type === 'field') {
+                    fields.push(name);
+                } else if (type === 'component') {
+                    fields = fields.concat(flattenComponent(name, dom));
+                }
             }
         }
+        MESSAGES[msgDef[0].attributes[0].value] = fields;
+        return fields;
+    } else {
+        return fields;
     }
-
-    //    console.log(msgDef[0].attributes[0].value + ': ' + _.uniq(fields).length);
-    return fields;
-
+    
 }
 
 function resolveFields(fieldArray, dom) {
@@ -167,7 +173,7 @@ function resolveFields(fieldArray, dom) {
     targetObj = {};
     let group = [];
 
-    // 35 is tag num for msgtype
+    // 35 is FIX tag num for msgtype
     const msgType = _.findWhere(fieldArray, { num: '35' }); 
     let msgDef = getMessageDefinition(msgType.raw, dom);
     let validFields = getMessageFields(msgDef, dom);
@@ -196,6 +202,9 @@ function resolveFields(fieldArray, dom) {
             targetObj[key] = val;
         }
     }
+
+    STATS[msgType.val] ? STATS[msgType.val] += 1 : STATS[msgType.val] = 1;
+
     return targetObj;
 }
 
@@ -268,24 +277,12 @@ function getFixVer(dom) {
 
 function readDataDictionary(fileLocation) {
 
-    // TODO: lazy load data dictionary based upon message type coming in
-    
     const xml = fs.readFileSync(fileLocation).toString();
     const dom = new DOMParser().parseFromString(xml);
     const nodes = xpath.select("//fix/fields/field", dom);
 
     getFixVer(dom);
 
-    // messages have fields, components and groups (4.x?)
-    // fields have tags
-    // components have fields and groups
-    // find all components
-    // list their direct child fields 
-    // figure out which component a particular group field belongs to
-    // if in nested repeating group, must know context of current group name
-    // just knowing all the possible fields under a particular message is not smart enough
-    
-    
     for (let i = 0; i < nodes.length; i++) {
         const tagNumber = nodes[i].attributes[0].value;
         const tagName = nodes[i].attributes[1].value;
