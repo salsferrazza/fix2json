@@ -16,7 +16,7 @@ let dictname;
 let filename;
 let TAGS = {};
 let MESSAGES = {};
-let FIX_VER = undefined;
+let DEFINITIONS = {};
 let rd = {};
 let yaml = false;
 const NUMERIC_TYPES = ['FLOAT', 'AMT', 'PRICE', 'QTY', 'INT', 'SEQNUM', 'NUMINGROUP', 'LENGTH', 'PRICEOFFSET'];
@@ -71,15 +71,17 @@ try {
 }
 
 function getMessageDefinition(messageType, dom) {
-    let def = {};
-    const select = '//fix/messages/message[@msgtype=\'' + messageType + '\']';
-    let msg = xpath.select(select, dom);
+    let msg = DEFINITIONS[messageType];   
+    if (!msg) {
+        const select = '//fix/messages/message[@msgtype=\'' + messageType + '\']';
+        msg = xpath.select(select, dom);
+    }
     return msg;
 }
 
 function pluckGroup(tagArray, msgDef, groupName, validFields) {
 
-	  let groupAnchor;
+    let groupAnchor;
     let group = [];
     let member = {};
     let firstProp = undefined;
@@ -96,15 +98,12 @@ function pluckGroup(tagArray, msgDef, groupName, validFields) {
         let val = tag.val;
         let num = tag.num;
         let raw = tag.raw
-        
-        //        console.log(util.inspect(validFields));
 
-        
         const tagInGroup = _.contains(validFields, key);
 		    let type;
 		    
 		    if (TAGS[raw]) {
-	    	    type = TAGS[num].type ? TAGS[num].type : 'STRING';
+	    	    type = TAGS[raw].type ? TAGS[raw].type : 'STRING';
 		    } else {
 			      type = 'STRING';
 		    }
@@ -130,23 +129,21 @@ function pluckGroup(tagArray, msgDef, groupName, validFields) {
 		    
         idx++;
 
-	  }
+    }
 
     return { group: {}, fieldsLeft: tagArray };
-    
+
 }
 
 function getMessageFields(msgDef, dom) {
-    let fields = MESSAGES[msgDef[0].attributes[0].value] || [];
 
+    let fields = MESSAGES[msgDef[0].attributes[0].value] || [];
     if (fields.length == 0) {
         const nodes = msgDef[0].childNodes;
-
         for (let i = 0; i < nodes.length; i++) {
             let type;
             let name;
             type = nodes[i].nodeName;
-
             if (type !== '#text') {
                 if (nodes[i].attributes) {
                     name = nodes[i].attributes[0].value;
@@ -192,20 +189,23 @@ function resolveFields(fieldArray, dom) {
 		    } else {
 			      type = 'STRING';
 		    }
-
         if (type === 'NUMINGROUP') {
-            let newGroup = pluckGroup(fieldArray, msgDef, key, validFields);
-            targetObj[key] = val;
-            targetObj[key.substring('No'.length)] = newGroup.group;
-            fieldArray = newGroup.fieldsLeft;
+            if (val > 0) {
+                let newGroup = pluckGroup(fieldArray, msgDef, key, validFields);
+                targetObj[key] = val;
+                targetObj[key.substring('No'.length)] = newGroup.group;
+                fieldArray = newGroup.fieldsLeft;
+            } else {
+                targetObj[key] = val;
+            }
         } else {
             targetObj[key] = val;
         }
     }
 
     STATS[msgType.val] ? STATS[msgType.val] += 1 : STATS[msgType.val] = 1;
-
     return targetObj;
+
 }
 
 function processLine(line, dom) {
@@ -267,21 +267,11 @@ function flattenComponent(componentName, dom) {
     }
 }
 
-
-function getFixVer(dom) {
-    const fixMaj = xpath.select("//fix/@major", dom)[0].value;
-    const fixMin = xpath.select("//fix/@minor", dom)[0].value;
-    const fixSp = xpath.select("//fix/@servicepack", dom)[0].value;
-    FIX_VER = [fixMaj, fixMin, fixSp].join('.');
-}
-
 function readDataDictionary(fileLocation) {
 
     const xml = fs.readFileSync(fileLocation).toString();
     const dom = new DOMParser().parseFromString(xml);
     const nodes = xpath.select("//fix/fields/field", dom);
-
-    getFixVer(dom);
 
     for (let i = 0; i < nodes.length; i++) {
         const tagNumber = nodes[i].attributes[0].value;
