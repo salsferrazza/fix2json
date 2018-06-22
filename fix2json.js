@@ -75,6 +75,7 @@ function getMessageDefinition(messageType, dom) {
     if (!msg) {
         const select = '//fix/messages/message[@msgtype=\'' + messageType + '\']';
         msg = xpath.select(select, dom);
+        DEFINITIONS[messageType] = msg;
     }
     return msg;
 }
